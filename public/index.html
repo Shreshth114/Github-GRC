@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Repository Threat Intelligence Platform</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <!-- Background Elements -->
+    <div class="bg-shape bg-shape-1"></div>
+    <div class="bg-shape bg-shape-2"></div>
+
+    <!-- Floating Live Alert Banner -->
+    <div id="liveAlertBanner" class="floating-alert hidden">
+      <div class="alert-icon">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+      </div>
+      <div class="alert-content">
+        <h4>Security Alert</h4>
+        <p id="liveAlertText">New API key detected in config.js after commit c3e91b.</p>
+      </div>
+      <button id="closeAlertBtn" class="close-alert">×</button>
+    </div>
+
+    <header class="topbar glass-nav">
+      <div class="topbar-inner container">
+        <div class="logo">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" class="brand-icon" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
+          <h1>Repository Threat Intelligence</h1>
+        </div>
+        <div class="user-badge">DevSecOps Workspace</div>
+      </div>
+    </header>
+
+    <main class="container">
+      <section class="scan-box glass-card accent-glow">
+        <h2>Initiate Intelligence Scan</h2>
+        <p class="subtitle">Perform deep threat telemetry analysis, credential propagation correlation, and live pipeline monitoring.</p>
+        
+        <div class="input-group">
+          <input
+            id="repoUrl"
+            type="url"
+            placeholder="https://github.com/owner/repo"
+            autocomplete="off"
+          />
+          <div class="btn-group-row">
+            <button id="scanBtn">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+              Execute Scan
+            </button>
+            <button id="startMonBtn" class="btn-secondary">
+              <span class="pulse-dot idle"></span>
+              Start Live Monitoring
+            </button>
+            <button id="stopMonBtn" class="btn-danger hidden">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect></svg>
+              Stop Monitoring
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Advanced Timeline & Loading State -->
+      <section id="timelineSection" class="timeline-section glass-card hidden">
+        <div class="timeline-container">
+          <div class="timeline-step" id="step1">
+            <div class="step-icon"><div class="spinner-small"></div></div>
+            <span class="step-text" id="loadText1">Ingesting Repository...</span>
+          </div>
+          <div class="timeline-step" id="step2">
+            <div class="step-icon"></div>
+            <span class="step-text" id="loadText2">Hunting Credentials...</span>
+          </div>
+          <div class="timeline-step" id="step3">
+            <div class="step-icon"></div>
+            <span class="step-text" id="loadText3">Tracing Propagation...</span>
+          </div>
+          <div class="timeline-step" id="step4">
+            <div class="step-icon"></div>
+            <span class="step-text" id="loadText4">Generating Intelligence...</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Threat Intelligence Dashboard -->
+      <section id="results" class="results-dashboard hidden">
+        
+        <!--- Optional Display for Monitor Active Mode --->
+        <div id="activeMonitorAlert" class="monitor-top-alert hidden">
+          <span class="pulse-dot active"></span> <span id="monPulseText">Monitoring repository... waiting for new commits.</span>
+        </div>
+
+        <div class="dashboard-grid layout-3col">
+          
+          <!-- Left Column: Live Monitoring, Metrics, History, Amplification -->
+          <div class="dashboard-col left-col">
+
+            <!-- Live DevSecOps Monitoring Panel -->
+            <div class="glass-card live-monitoring-card hidden" id="liveMonitoringPanel">
+              <h3>Live Monitoring</h3>
+              <ul class="metrics-list no-border compact mb-3">
+                <li><span class="metric-lbl">Target:</span> <strong id="monRepoName" class="ellipse-text">-</strong></li>
+                <li><span class="metric-lbl">Status:</span> <strong id="monStatusLbl" style="color:var(--green)">Active</strong></li>
+                <li><span class="metric-lbl">Last Commit:</span> <strong id="monLastSha">-</strong></li>
+                <li><span class="metric-lbl">Interval:</span> <strong>2 seconds</strong></li>
+              </ul>
+              
+              <div class="activity-feed-wrapper">
+                 <div class="feed-header">Activity Feed</div>
+                 <div id="activityFeed" class="activity-feed-list">
+                    <!-- JS Feed Entries -->
+                 </div>
+              </div>
+            </div>
+            
+            <!-- Circular Gauge & Score -->
+            <div class="glass-card flex-col-center">
+              <h3>Security Index</h3>
+              <div class="gauge-container">
+                <div id="scoreGauge" class="gauge"></div>
+                <div class="gauge-inner">
+                   <span id="scoreValue" class="gauge-score">0</span>
+                </div>
+              </div>
+              
+              <div class="risk-highlight mt-4">
+                <span class="metric-lbl">Breach Risk:</span> 
+                <strong id="breachRiskLabel" class="glow-val">UNKNOWN</strong>
+              </div>
+              <div class="risk-highlight no-border">
+                <span class="metric-lbl">Exploit Likelihood:</span> 
+                <strong id="exploitLikelihoodVal">0%</strong>
+              </div>
+            </div>
+
+            <!-- Exposure Amplification Factor -->
+            <div class="glass-card exposure-amp-card">
+              <h3>Reputation & Exposure</h3>
+              <p class="subtitle sm">Repository Amplification Factor</p>
+              <ul class="metrics-list no-border compact">
+                <li><span class="metric-lbl">Visibility:</span> <strong id="repoVisibility">-</strong></li>
+                <li><span class="metric-lbl">Stars:</span> <strong id="repoStars">0</strong></li>
+                <li><span class="metric-lbl">Forks:</span> <strong id="repoForks">0</strong></li>
+              </ul>
+              <div class="amp-factor-box mt-3">
+                <span class="metric-lbl">Amp Factor:</span>
+                <strong id="ampFactorLabel" class="glow-val">UNKNOWN</strong>
+              </div>
+            </div>
+
+            <!-- Scan History -->
+            <div class="glass-card">
+              <h3>Scan History</h3>
+              <ul id="historyList" class="history-list"></ul>
+            </div>
+            
+          </div>
+
+          <!-- Middle Column: Issues -->
+          <div class="dashboard-col main-col">
+            <div class="issues-header">
+              <h2>Detected Security Anomalies</h2>
+            </div>
+            
+            <div id="issuesList" class="issues-container">
+              <!-- Dynamically populated -->
+            </div>
+          </div>
+
+          <!-- Right Column: Propagations, CI/CD, Chains, Summaries -->
+          <div class="dashboard-col right-col">
+            
+            <!-- Security Intelligence Summary -->
+            <div class="glass-card ai-insights-card">
+              <h3><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg> Intelligence Summary</h3>
+              <div id="intelSummary" class="ai-list mt-3 text-sm">
+                <!-- Dynamically generated AI summary -->
+              </div>
+            </div>
+
+            <!-- Total Summary Pills -->
+            <div class="glass-card summary-totals">
+               <div class="summary-total" id="summaryTotal">0 Findings</div>
+               <div class="dots-row">
+                 <span class="badge glow-red"><span id="sumHigh">0</span> HIGH</span>
+                 <span class="badge glow-orange"><span id="sumMedium">0</span> MED</span>
+                 <span class="badge glow-yellow"><span id="sumLow">0</span> LOW</span>
+               </div>
+            </div>
+            
+            <!-- CI/CD Pipeline Detection -->
+            <div class="glass-card cicd-card hidden" id="cicdCard">
+              <h3 style="color:var(--red)"><svg width="14" height="14" viewBox="0 0 24 24" fill="var(--red)" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg> CI/CD Leak Detected</h3>
+              <p class="subtitle sm text-danger">A secret was exposed inside a deployment pipeline configuration!</p>
+              <ul id="cicdList" class="heatmap-list mt-3"></ul>
+            </div>
+
+            <!-- Credential Propagation Analysis -->
+            <div class="glass-card prop-card hidden" id="propCard">
+              <h3>Credential Propagation Radius</h3>
+              <div id="propList" class="prop-tree">
+                <!-- JS Population: Propagation Tree -->
+              </div>
+            </div>
+
+            <!-- Interactive Attack Chain Graph -->
+            <div class="glass-card attack-paths-card hidden" id="attackChainCard">
+              <h3>Attack Chain Simulation</h3>
+              <div id="attackChainWrapper" class="attack-chain-wrapper mt-3">
+                <!-- JS Population: Visual Nodes -->
+              </div>
+            </div>
+
+          </div><!-- end Right Col -->
+
+        </div>
+
+      </section>
+    </main>
+
+    <script src="script.js"></script>
+  </body>
+</html>
