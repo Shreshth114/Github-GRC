@@ -34,6 +34,12 @@ const attackChainWrapper = document.getElementById("attackChainWrapper");
 const historyList = document.getElementById("historyList");
 const issuesListEl = document.getElementById("issuesList");
 
+function escapeHTML(value) {
+  return String(value).replace(/[&<>"']/g, char => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[char]));
+}
+
 // Monitoring Elements
 const liveMonitoringPanel = document.getElementById("liveMonitoringPanel");
 const monRepoName = document.getElementById("monRepoName");
@@ -208,7 +214,7 @@ function renderUI(data, durationMs, repoUrl, isSilent) {
   else if ((visScore + st) > 50) { ampLabel = "MEDIUM"; ampClass = "orange"; }
   ampFactorLabel.textContent = ampLabel; ampFactorLabel.className = `glow-val ${ampClass}`;
 
-  if (metricFiles) metricFiles.textContent = data.issues.length ? Math.floor(Math.random()*50)+data.issues.length+20 : Math.floor(Math.random()*100)+50;
+  if (metricFiles) metricFiles.textContent = data.scanMeta?.filesScanned ?? "Unavailable";
   if (metricTime) metricTime.textContent = (durationMs/1000).toFixed(2) + "s";
   if (metricBranch) metricBranch.textContent = branchName;
 
@@ -220,8 +226,11 @@ function renderUI(data, durationMs, repoUrl, isSilent) {
   let aiInsightsHTML = "";
 
   if (data.issues.length === 0) {
-    issuesListEl.innerHTML = "<div class='glass-card' style='text-align:center;color:var(--green);'>No anomalies detected. Repository adheres to security compliance standards.</div>";
-    aiInsightsHTML += "<p>Repository is clean. Secure engineering practices observed.</p>";
+    issuesListEl.innerHTML = "<div class='glass-card' style='text-align:center;color:var(--green);'>No matching patterns found in the scanned files. This does not establish security or compliance.</div>";
+    aiInsightsHTML += "<p>No heuristic matches found in scanned files.</p>";
+  }
+  if (data.scanMeta && !data.scanMeta.complete) {
+    aiInsightsHTML += `<p>Partial scan: ${data.scanMeta.filesScanned} files scanned, ${data.scanMeta.filesSkipped} skipped, ${data.scanMeta.filesFailed} failed. File or tree limits reached: ${Boolean(data.scanMeta.truncated)}.</p>`;
   }
 
   // Delta Warning Generation during Live Monitor
@@ -279,7 +288,7 @@ function renderUI(data, durationMs, repoUrl, isSilent) {
     hdr.className = "issue-card-header";
     hdr.innerHTML = `
       <div class="issue-header-wrap">
-        <h3 class="issue-title">${issue.message}</h3>
+        <h3 class="issue-title">${escapeHTML(issue.message)}</h3>
         <div class="issue-primary">
           <span class="badge glow-${issue.severity.toLowerCase()}">${issue.severity} Severity</span>
           <span class="issue-type">${classification.type}</span>
@@ -295,7 +304,7 @@ function renderUI(data, durationMs, repoUrl, isSilent) {
     const body = document.createElement("div");
     body.className = "issue-card-body";
     body.innerHTML = `
-      <div class="issue-file">Source: ${issue.file}</div>
+      <div class="issue-file">Source: ${escapeHTML(issue.file)}</div>
       <div class="metrics-row">
         <div class="explanation-block">
           <h4>Potential Impact</h4>
@@ -400,7 +409,7 @@ function renderHistory() {
     let c = "var(--green)";
     if(h.score < 40) c = "var(--red)"; else if(h.score < 70) c = "var(--orange)"; else if(h.score < 90) c = "var(--yellow)";
     let shortName = h.repo.replace("https://github.com/", ""); if(shortName.length > 20) shortName = shortName.substring(0, 20) + "...";
-    li.innerHTML = `<span class="repo-name" title="${h.repo}">${shortName}</span> <span class="score-badge" style="color:${c}">${h.score}</span>`;
+    li.innerHTML = `<span class="repo-name" title="${escapeHTML(h.repo)}">${escapeHTML(shortName)}</span> <span class="score-badge" style="color:${c}">${escapeHTML(h.score)}</span>`;
     historyList.appendChild(li);
   });
 }
@@ -415,7 +424,7 @@ function logActivity(msg) {
   const timeStr = d.toTimeString().split(' ')[0];
   const el = document.createElement("div");
   el.className = "feed-entry";
-  el.innerHTML = `<span class="feed-time">${timeStr}</span> <span class="feed-msg">— ${msg}</span>`;
+  el.innerHTML = `<span class="feed-time">${timeStr}</span> <span class="feed-msg">— ${escapeHTML(msg)}</span>`;
   activityFeed.appendChild(el);
   activityFeed.scrollTop = activityFeed.scrollHeight;
 }

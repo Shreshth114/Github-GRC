@@ -39,102 +39,18 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
 
-const patterns = [
-  {
-    severity: "HIGH",
-    message: "AWS secret detected",
-    regex: /(?:aws_secret_access_key|AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|A3T[A-Z0-9]{16})/i
-  },
-  {
-    severity: "HIGH",
-    message: "Private key exposed",
-    regex: /-----BEGIN (?:RSA|EC|DSA|OPENSSH|PRIVATE) PRIVATE KEY-----/
-  },
-  {
-    severity: "MEDIUM",
-    message: "Firebase API key pattern detected",
-    regex: /AIza[0-9A-Za-z\-_]{35}/
-  },
-  {
-    severity: "MEDIUM",
-    message: "API key found in code",
-    regex: /\b(?:api[_-]?key|apikey)\b\s*[:=]\s*["'][^"']{8,}["']/i
-  },
-  {
-    severity: "MEDIUM",
-    message: "Token assignment detected",
-    regex: /\b(?:token|auth[_-]?token|access[_-]?token)\b\s*[:=]\s*["'][^"']{8,}["']/i
-  },
-  {
-    severity: "LOW",
-    message: "Password variable detected",
-    regex: /\bpassword\b\s*[:=]/i
-  },
-  {
-    severity: "LOW",
-    message: "Secret variable detected",
-    regex: /\bsecret\b\s*[:=]/i
-  },
-  {
-    severity: "LOW",
-    message: ".env reference found",
-    regex: /\.env\b/i
-  },
-  {
-    severity: "HIGH",
-    message: "Potential private SSH key detected",
-    regex: /\bssh-rsa\s+[A-Za-z0-9+/=]+/
-  }
-];
-
-const severityDeduction = {
-  HIGH: 25,
-  MEDIUM: 10,
-  LOW: 2
-};
+const { isLikelyTextFile, scanContent, calculateScore } = require("./lib/scanner");
 
 function parseRepoUrl(repoUrl) {
   try {
     const parsed = new URL(repoUrl);
-    if (!parsed.hostname.includes("github.com")) return null;
+    if (parsed.protocol !== "https:" || parsed.hostname !== "github.com" || parsed.username || parsed.password) return null;
     const parts = parsed.pathname.split("/").filter(Boolean);
-    if (parts.length < 2) return null;
-    const owner = parts[0];
-    const repo = parts[1].replace(/\.git$/, "");
-    return { owner, repo };
+    if (parts.length < 2 || !/^[A-Za-z0-9-]+$/.test(parts[0]) || !/^[A-Za-z0-9_.-]+$/.test(parts[1])) return null;
+    return { owner: parts[0], repo: parts[1].replace(/\.git$/, "") };
   } catch (error) {
     return null;
   }
-}
-
-function isLikelyTextFile(filePath) {
-  const lower = filePath.toLowerCase();
-  
-  if (
-    lower.includes("node_modules/") ||
-    lower.includes("dist/") ||
-    lower.includes("build/") ||
-    lower.includes("vendor/") ||
-    lower.endsWith(".min.js")
-  ) {
-    return false;
-  }
-
-  const allowed = [
-    ".js", ".jsx", ".ts", ".tsx", ".py", ".java", ".rb", ".go", ".php", ".cs",
-    ".cpp", ".c", ".h", ".hpp", ".swift", ".kt", ".rs", ".scala", ".sh", ".bash",
-    ".zsh", ".env", ".json", ".yaml", ".yml", ".toml", ".ini", ".xml", ".html",
-    ".css", ".scss", ".md", ".txt", ".conf", ".config", ".sql", ".properties"
-  ];
-  const blocked = [
-    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".svg", ".pdf", ".zip",
-    ".tar", ".gz", ".jar", ".war", ".exe", ".dll", ".so", ".dylib", ".mp3",
-    ".mp4", ".mov", ".avi", ".woff", ".woff2", ".ttf", ".eot", ".class"
-  ];
-
-  if (blocked.some((ext) => lower.endsWith(ext))) return false;
-  if (allowed.some((ext) => lower.endsWith(ext))) return true;
-  return !lower.includes(".");
 }
 
 async function fetchRepoFiles(owner, repo, branch) {
@@ -142,21 +58,9 @@ async function fetchRepoFiles(owner, repo, branch) {
   const treeResp = await github.get(treeUrl);
   const treeItems = treeResp.data.tree || [];
   const files = treeItems.filter((item) => item.type === "blob" && isLikelyTextFile(item.path));
-  return files.slice(0, MAX_FILES_TO_SCAN);
-}
-
-function scanContent(content, filePath) {
-  const issues = [];
-  for (const pattern of patterns) {
-    if (pattern.regex.test(content)) {
-      issues.push({
-        severity: pattern.severity,
-        file: filePath,
-        message: pattern.message
-      });
-    }
-  }
-  return issues;
+  const selected = files.slice(0, MAX_FILES_TO_SCAN);
+  selected.truncated = Boolean(treeResp.data.truncated) || files.length > MAX_FILES_TO_SCAN;
+  return selected;
 }
 
 app.post("/scan", async (req, res) => {
@@ -174,6 +78,9 @@ app.post("/scan", async (req, res) => {
   try {
     const repoMetaUrl = `/repos/${parsed.owner}/${parsed.repo}`;
     const repoResp = await github.get(repoMetaUrl);
+    if (repoResp.data.private || repoResp.data.visibility !== "public") {
+      return res.status(403).json({ error: "This public demo only scans public repositories." });
+    }
     const branch = repoResp.data.default_branch || "main";
     const stars = repoResp.data.stargazers_count || 0;
     const forks = repoResp.data.forks_count || 0;
@@ -181,29 +88,32 @@ app.post("/scan", async (req, res) => {
 
     const files = await fetchRepoFiles(parsed.owner, parsed.repo, branch);
     const issues = [];
+    let filesScanned = 0;
+    let filesSkipped = 0;
+    let filesFailed = 0;
 
     for (const file of files) {
-      if (file.size > MAX_FILE_SIZE_BYTES) continue;
+      if (file.size > MAX_FILE_SIZE_BYTES) { filesSkipped++; continue; }
       try {
         const blobUrl = `/repos/${parsed.owner}/${parsed.repo}/contents/${encodeURIComponent(file.path)}?ref=${encodeURIComponent(branch)}`;
         const fileResp = await github.get(blobUrl);
         if (fileResp.data && fileResp.data.type === "file" && fileResp.data.content) {
           const decoded = Buffer.from(fileResp.data.content, "base64").toString("utf8");
           const fileIssues = scanContent(decoded, file.path);
+          filesScanned++;
           issues.push(...fileIssues);
-        }
+        } else { filesSkipped++; }
       } catch (error) {
-        continue;
+        filesFailed++;
       }
     }
 
-    let score = 100;
-    for (const issue of issues) {
-      score -= severityDeduction[issue.severity] || 0;
-    }
-    score = Math.max(0, score);
+    const score = calculateScore(issues);
 
-    return res.json({ score, issues, repoMeta: { branch, stars, forks, visibility } });
+    return res.json({ score, issues, repoMeta: { branch, stars, forks, visibility },
+      scanMeta: { filesScanned, filesSkipped, filesFailed, maxFiles: MAX_FILES_TO_SCAN,
+        maxFileSizeBytes: MAX_FILE_SIZE_BYTES, complete: filesFailed === 0 && filesSkipped === 0 && !files.truncated,
+        truncated: Boolean(files.truncated) } });
   } catch (error) {
     if (error.response && error.response.status === 404) {
       return res.status(404).json({ error: "Repository not found or inaccessible." });
@@ -220,12 +130,17 @@ app.post("/scan", async (req, res) => {
 
 app.post("/latest-commit", async (req, res) => {
   const { repoUrl, branch } = req.body || {};
-  if (!repoUrl) return res.status(400).json({ error: "repoUrl required" });
+  if (!repoUrl || typeof repoUrl !== "string") return res.status(400).json({ error: "repoUrl required" });
+  if (branch !== undefined && (typeof branch !== "string" || !branch.trim())) return res.status(400).json({ error: "Invalid branch" });
   const parsed = parseRepoUrl(repoUrl);
   if (!parsed) return res.status(400).json({ error: "Invalid URL" });
   
   try {
-    const targetBranch = branch || "main";
+    const repoResp = await github.get(`/repos/${parsed.owner}/${parsed.repo}`);
+    if (repoResp.data.private || repoResp.data.visibility !== "public") {
+      return res.status(403).json({ error: "This public demo only scans public repositories." });
+    }
+    const targetBranch = branch || repoResp.data.default_branch;
     const commitUrl = `/repos/${parsed.owner}/${parsed.repo}/commits?sha=${encodeURIComponent(targetBranch)}&per_page=1`;
     const resp = await github.get(commitUrl);
     if (resp.data && resp.data.length > 0) {
@@ -237,6 +152,10 @@ app.post("/latest-commit", async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running at http://localhost:${PORT}`);
-});
+if (require.main === module) {
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`Server listening on port ${PORT}`);
+  });
+}
+
+module.exports = { app, github, parseRepoUrl };

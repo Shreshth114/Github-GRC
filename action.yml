@@ -1,0 +1,55 @@
+name: 'Security Agent'
+description: 'AI-powered security scanning for pull requests. Detects hardcoded secrets, API keys, and credentials with inline PR annotations.'
+author: 'Security Agent'
+
+branding:
+  icon: 'shield'
+  color: 'red'
+
+inputs:
+  severity-threshold:
+    description: 'Minimum severity level to fail the check. Options: LOW, MEDIUM, HIGH'
+    required: false
+    default: 'HIGH'
+  scan-mode:
+    description: 'Scan mode: diff-only (only changed files) or full (entire repo)'
+    required: false
+    default: 'diff-only'
+  fail-on-findings:
+    description: 'Whether to fail the Action when findings at or above the threshold are found'
+    required: false
+    default: 'true'
+  sarif-output:
+    description: 'Path to write SARIF output file (for GitHub Code Scanning integration)'
+    required: false
+    default: ''
+  llm-enabled:
+    description: 'Whether to use LLM for context-aware vulnerability analysis'
+    required: false
+    default: 'false'
+  llm-provider:
+    description: 'LLM Provider (Currently supported: openai)'
+    required: false
+    default: 'openai'
+  llm-api-key:
+    description: 'API key for the selected LLM provider'
+    required: false
+    default: ''
+
+outputs:
+  score:
+    description: 'Security score (0-100)'
+  total-findings:
+    description: 'Total number of findings'
+  high-count:
+    description: 'Number of HIGH severity findings'
+  medium-count:
+    description: 'Number of MEDIUM severity findings'
+  low-count:
+    description: 'Number of LOW severity findings'
+  risk-level:
+    description: 'Overall risk level: SECURE, LOW, MEDIUM, HIGH, CRITICAL'
+
+runs:
+  using: 'node24'
+  main: 'agent/index.js'
