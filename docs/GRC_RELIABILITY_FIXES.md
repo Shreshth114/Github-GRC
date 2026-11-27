@@ -26,8 +26,39 @@ No real GitHub credential or LLM key is used by these tests. No additional LLM c
 
 ## Deployment verification
 
-Pending rollout of the tested source and live rechecks. Actual results will be appended after Render is live.
+Source `5548171b5dfca3a09519c53e4392ab916b6f77bc` is live in Render deployment `dep-dc4nu95bedkc73drmdrg`. GitHub CI passed: https://github.com/Shreshth114/Github-GRC/actions/runs/46003513762.
+
+All **20 live checks passed**. The served HTML, JavaScript and CSS matched the tested files byte-for-byte. Both previously failing commit-lookup cases now return sanitized JSON 404. Malformed JSON returns 400 and oversized JSON returns 413. Secret/configuration and server source paths return 404.
+
+The real GRC scan was pinned to that source commit: 26 files scanned, 0 skipped, 0 failed, 0 unprocessed, complete coverage within the declared limits. All 19 finding tuples and the heuristic score of 0 matched the same source files scanned locally. A zero score here reflects matches in the project's own illustrative samples, tests and source; it is not proof of 19 actual security vulnerabilities. The one request took approximately 4.79 seconds. A second real public repository scan read 2 files successfully in approximately 1.26 seconds. These timings are individual observations, not performance benchmarks.
+
+| Live check | HTTP | Result |
+| --- | --- | --- |
+| served asset matches tested file / | 200 | Pass |
+| served asset matches tested file /script.js | 200 | Pass |
+| served asset matches tested file /style.css | 200 | Pass |
+| protected file /.env | 404 | Pass |
+| protected file /server.js | 404 | Pass |
+| protected file /lib/scanner.js | 404 | Pass |
+| empty scan | 400 | Pass |
+| invalid URL | 400 | Pass |
+| lookalike hostname | 400 | Pass |
+| custom port | 400 | Pass |
+| invalid commit | 400 | Pass |
+| invalid branch | 400 | Pass |
+| missing repository scan | 404 | Pass |
+| missing repository commit | 404 | Pass |
+| missing branch | 404 | Pass |
+| default branch commit | 200 | Pass |
+| malformed JSON | 400 | Pass |
+| oversized JSON | 413 | Pass |
+| GRC scan at exact committed revision | 200 | Pass |
+| small public repository scan | 200 | Pass |
 
 ## Limits
 
 This remains a heuristic public-repository scanner. It does not establish credential validity, compromise probability, full repository coverage beyond the stated limits, or compliance. Optional LLM triage remains disabled and was not live-tested. BrowserOS tools are unavailable; DOM interaction tests are not visual browser testing. No high-concurrency load or destructive quota-exhaustion test was run against GitHub or Render.
+
+## Live API-backed DOM monitoring check
+
+Running the exact deployed HTML/script with real API calls, separately from mocked regression tests. The documentation commit recording the checks above will provide a real source change. Final monitoring outcome will be appended after observation. No application redeploy is needed for this documentation-only commit.
