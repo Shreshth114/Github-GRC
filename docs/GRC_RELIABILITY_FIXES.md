@@ -61,4 +61,28 @@ This remains a heuristic public-repository scanner. It does not establish creden
 
 ## Live API-backed DOM monitoring check
 
-Running the exact deployed HTML/script with real API calls, separately from mocked regression tests. The documentation commit recording the checks above will provide a real source change. Final monitoring outcome will be appended after observation. No application redeploy is needed for this documentation-only commit.
+**Passed: all four live API-backed DOM flows.** The exact deployed HTML and script were loaded into jsdom (their bytes were checked against the tested files) and called the real deployed endpoints. This is distinct from the mocked frontend regressions and from visual browser verification.
+
+1. Manual scan rendered the actual Node-Health-checkup repository.
+2. Monitoring switched to Github-GRC and completed a fresh pinned baseline.
+3. The real documentation commit was detected, rescanned at its exact SHA and displayed.
+4. Stop restored the controls; no additional requests appeared during a 5.5-second observation, exceeding the normal five-second poll delay.
+
+Baseline: `5548171b5dfca3a09519c53e4392ab916b6f77bc`. Observed/rescanned revision: `168c55bc0eec66431c76d171b72882b84425722c`.
+
+| Real API request | HTTP | Commit requested |
+| --- | --- | --- |
+| /scan | 200 | — |
+| /latest-commit | 200 | — |
+| /scan | 200 | 5548171b5dfca3a09519c53e4392ab916b6f77bc |
+| /latest-commit | 200 | — |
+| /latest-commit | 200 | — |
+| /latest-commit | 200 | — |
+| /latest-commit | 200 | — |
+| /latest-commit | 200 | — |
+| /scan | 200 | 168c55bc0eec66431c76d171b72882b84425722c |
+
+The first one-off harness attempt tried to inspect a script-private lexical variable and failed as a harness error. The corrected harness reads displayed repository/commit metadata; no application code was changed to expose internal state. All four flows above passed on that corrected run.
+
+The runtime error-log query after deployment returned no error-level log entries. This is an observation for the queried interval, not a guarantee against every future failure. The live code remains source `5548171`; subsequent report-only commits use `[skip render]` and do not change the running application. No extra credentials were transferred, no LLM calls were made, and CampusDecoded remains unchanged.
+
