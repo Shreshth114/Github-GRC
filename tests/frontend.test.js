@@ -21,6 +21,7 @@ function setup(handler, prepare) {
   let id = 0;
   w.setTimeout = (fn, delay) => { timers.set(++id, { fn, delay }); return id; };
   w.clearTimeout = key => timers.delete(key);
+  w.matchMedia = () => ({ matches: true });
   w.fetch = async (route, options) => {
     const call = { route, body: JSON.parse(options.body), signal: options.signal };
     calls.push(call);
@@ -170,5 +171,61 @@ test('copy and download operate on the labelled example; clipboard failures are 
     t.w.navigator.clipboard.writeText = async () => { throw new Error('Permission denied'); };
     t.el('copyFix_0').click(); await settle();
     assert.match(t.el('scanFeedback').textContent, /Could not copy/);
+  } finally { t.dom.window.close(); }
+});
+
+test('four-step timeline advances without marking the server scan complete before its response', async () => {
+  let finish;
+  const t = setup(() => new Promise(resolve => { finish = resolve; }), w => {
+    w.matchMedia = () => ({ matches: false });
+  });
+  try {
+    const pending = t.w.scanRepository();
+    assert.equal(t.el('timelineSection').querySelectorAll('[data-scan-step]').length, 4);
+    assert.equal(t.el('timelineSection').querySelector('[aria-current="step"]').dataset.scanStep, '0');
+    assert.equal(t.calls.length, 1, 'API starts immediately, independently of animation');
+    await t.next(180);
+    assert.equal(t.el('timelineSection').querySelector('[aria-current="step"]').dataset.scanStep, '1');
+    assert.equal(t.el('results').classList.contains('hidden'), true);
+    await t.next(10000);
+    assert.match(t.el('scanStageDetail').textContent, /Still scanning/);
+    assert.equal(t.el('timelineSection').querySelectorAll('.done').length, 1);
+    finish(response(scan())); await settle();
+    assert.equal(t.el('timelineSection').querySelector('[aria-current="step"]').dataset.scanStep, '2');
+    assert.equal(t.el('results').classList.contains('hidden'), true);
+    await t.next(360); await pending;
+    assert.equal(t.el('timelineSection').querySelectorAll('.done').length, 4);
+    assert.equal(t.el('timelineSection').querySelectorAll('[aria-current]').length, 0);
+    assert.equal(t.el('results').classList.contains('hidden'), false);
+    assert.equal(t.el('timelineSection').classList.contains('hidden'), false);
+    assert.equal(t.el('scanProgressBadge').textContent, 'Complete');
+    assert.equal(t.timers.size, 0);
+  } finally { t.dom.window.close(); }
+});
+
+test('reduced motion skips the report animation and partial reports remain explicit', async () => {
+  const data = scan(); data.scanMeta.complete = false;
+  const t = setup(() => response(data));
+  try {
+    await t.w.scanRepository();
+    assert.equal(t.el('timelineSection').querySelectorAll('.done').length, 4);
+    assert.equal(t.el('scanProgressBadge').textContent, 'Partial report');
+    assert.match(t.el('scanStageDetail').textContent, /Partial scan/);
+    assert.equal(t.timers.size, 0);
+  } finally { t.dom.window.close(); }
+});
+
+test('Stop during the report transition cancels animations and discards the delayed completion', async () => {
+  const t = setup(call => response(call.route === '/scan' ? scan() : { sha: A }), w => {
+    w.matchMedia = () => ({ matches: false });
+  });
+  try {
+    const pending = t.w.startLiveMonitoring(); await settle();
+    assert.ok([...t.timers.values()].some(timer => timer.delay === 360));
+    t.w.stopLiveMonitoring(); await pending;
+    assert.equal(t.el('timelineSection').classList.contains('hidden'), true);
+    assert.equal(t.el('results').classList.contains('hidden'), true);
+    assert.equal(t.el('monLastSha').textContent, '—');
+    assert.equal(t.timers.size, 0);
   } finally { t.dom.window.close(); }
 });

@@ -152,8 +152,70 @@ function updateGauge(score) {
   scoreGauge.style.background = `conic-gradient(${color} ${score * 3.6}deg, var(--bg-glass) 0deg)`;
 }
 
+let timelineTimers = new Set();
+let timelineResolve = null;
+
+function clearTimelineTimers() {
+  for (const timer of timelineTimers) clearTimeout(timer);
+  timelineTimers.clear();
+  if (timelineResolve) { const resolve = timelineResolve; timelineResolve = null; resolve(false); }
+}
+
+function timelineLater(callback, delay) {
+  const timer = setTimeout(() => { timelineTimers.delete(timer); callback(); }, delay);
+  timelineTimers.add(timer);
+}
+
+function setTimelineStage(stage, detail, complete = false) {
+  timelineSection.querySelectorAll('[data-scan-step]').forEach((step, index) => {
+    step.classList.toggle('done', complete || index < stage);
+    step.classList.toggle('active', !complete && index === stage);
+    if (!complete && index === stage) step.setAttribute('aria-current', 'step');
+    else step.removeAttribute('aria-current');
+  });
+  timelineSection.classList.toggle('is-complete', complete);
+  document.getElementById('scanProgressTitle').textContent = complete ? 'Your scan report is ready' : 'Your repository, under review';
+  document.getElementById('scanProgressFill').style.width = `${complete ? 100 : [8, 40, 76, 100][stage]}%`;
+  document.getElementById('scanStageDetail').textContent = detail;
+  const badge = document.getElementById('scanProgressBadge');
+  badge.innerHTML = complete ? '<span aria-hidden="true"></span>Complete' : '<span aria-hidden="true"></span>In progress';
+}
+
 function renderTimeline() {
-  timelineSection.classList.remove("hidden");
+  clearTimelineTimers();
+  timelineSection.classList.remove('hidden');
+  resultsEl.classList.remove('results-enter');
+  setTimelineStage(0, 'Sending your repository to the scanner…');
+  // This short transition introduces the request; it is not simulated server progress.
+  timelineLater(() => setTimelineStage(1, 'GitHub files are being read and checked. Larger repositories can take longer.'), 180);
+  timelineLater(() => {
+    document.getElementById('scanStageDetail').textContent = 'Still scanning source files. We’ll show the report as soon as the scanner responds.';
+  }, 10000);
+}
+
+function finishTimeline(data) {
+  clearTimelineTimers();
+  const count = data.scanMeta?.filesScanned ?? 0;
+  const matches = data.issues.length;
+  setTimelineStage(2, `Building your report from ${count} scanned files and ${matches} pattern ${matches === 1 ? 'match' : 'matches'}…`);
+  return new Promise(resolve => {
+    timelineResolve = resolve;
+    const complete = () => {
+      timelineResolve = null;
+      const coverage = data.scanMeta?.complete ? 'Scan complete' : 'Partial scan — review the coverage details';
+      setTimelineStage(3, `${coverage} · ${count} files scanned · ${matches} pattern ${matches === 1 ? 'match' : 'matches'}.`, true);
+      if (!data.scanMeta?.complete) document.getElementById('scanProgressBadge').innerHTML = '<span aria-hidden="true"></span>Partial report';
+      resultsEl.classList.add('results-enter');
+      resolve(true);
+    };
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) complete();
+    else timelineLater(complete, 360);
+  });
+}
+
+function hideTimeline() {
+  clearTimelineTimers();
+  timelineSection.classList.add('hidden');
 }
 
 function attachFixHandlers(buttonId, snippet) {
@@ -494,6 +556,7 @@ async function doSilentScan(sha, session) {
   if (!monitoring || session !== monitorSession) return;
   if (data.repoMeta.commitSha !== sha) throw new Error('The scan revision did not match the requested commit. Retrying.');
   renderUI(data, performance.now() - started, currentRepoUrl, lastCommitSha !== null);
+  if (!await finishTimeline(data) || !monitoring || session !== monitorSession) return;
   resultsEl.classList.remove('hidden');
   if (data.scanMeta?.filesFailed || data.scanMeta?.filesUnprocessed) {
     const error = new Error('Scan incomplete. Partial results are shown; this commit will be retried.');
@@ -530,7 +593,7 @@ async function pollCommit(session = monitorSession) {
     setMonitorStatus('Waiting to retry');
     if ([403, 404, 422].includes(error.status) || error.code === 'github_auth_failed') stopLiveMonitoring();
   } finally {
-    if (session === monitorSession) timelineSection.classList.add('hidden');
+    if (session === monitorSession && !timelineSection.classList.contains('is-complete')) hideTimeline();
     if (monitoring && session === monitorSession) {
       // Schedule after completion; slow scans cannot overlap subsequent polls.
       monitorInterval = setTimeout(() => pollCommit(session), delay);
@@ -576,7 +639,7 @@ function stopLiveMonitoring() {
   stopMonBtn.classList.add('hidden');
   activeMonitorAlert.classList.add('hidden');
   liveAlertBanner.classList.add('hidden');
-  timelineSection.classList.add('hidden');
+  hideTimeline();
   scanBtn.disabled = false;
   repoInput.disabled = false;
   setMonitorStatus('Stopped');
@@ -599,6 +662,7 @@ async function scanRepository() {
   try {
     const data = await requestJSON('/scan', { repoUrl });
     renderUI(data, performance.now() - started, repoUrl, false);
+    if (!await finishTimeline(data)) return;
     resultsEl.classList.remove('hidden');
     showFeedback(data.scanMeta?.complete ? 'Scan complete.' : 'Partial scan: review the coverage details in the summary.');
   } catch (error) {
@@ -608,7 +672,7 @@ async function scanRepository() {
     scanBtn.disabled = false;
     startMonBtn.disabled = false;
     repoInput.disabled = false;
-    timelineSection.classList.add('hidden');
+    if (!timelineSection.classList.contains('is-complete')) hideTimeline();
   }
 }
 

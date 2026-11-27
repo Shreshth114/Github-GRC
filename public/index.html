@@ -64,8 +64,34 @@
       </section>
 
       <p id="scanFeedback" role="status" aria-live="polite" hidden></p>
-      <section id="timelineSection" class="timeline-section glass-card hidden" role="status" aria-live="polite">
-        <span class="spinner-small" aria-hidden="true"></span> Reading repository files and checking patterns…
+      <section id="timelineSection" class="timeline-section glass-card hidden" aria-labelledby="scanProgressTitle">
+        <div class="scan-progress-heading">
+          <div>
+            <span class="scan-progress-eyebrow">SCAN WORKFLOW</span>
+            <h3 id="scanProgressTitle">Your repository, under review</h3>
+          </div>
+          <span id="scanProgressBadge" class="scan-progress-badge"><span aria-hidden="true"></span>In progress</span>
+        </div>
+        <ol class="scan-steps" aria-label="Scan workflow">
+          <li class="scan-step" data-scan-step="0">
+            <span class="scan-step-marker" aria-hidden="true"><span class="scan-step-number">1</span><svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg></span>
+            <div><span class="scan-step-title">Prepare scan</span><span class="scan-step-caption">Send your repository request</span></div>
+          </li>
+          <li class="scan-step" data-scan-step="1">
+            <span class="scan-step-marker" aria-hidden="true"><span class="scan-step-number">2</span><svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg></span>
+            <div><span class="scan-step-title">Scan source</span><span class="scan-step-caption">Read files &amp; check patterns</span></div>
+          </li>
+          <li class="scan-step" data-scan-step="2">
+            <span class="scan-step-marker" aria-hidden="true"><span class="scan-step-number">3</span><svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg></span>
+            <div><span class="scan-step-title">Build report</span><span class="scan-step-caption">Organise findings &amp; coverage</span></div>
+          </li>
+          <li class="scan-step" data-scan-step="3">
+            <span class="scan-step-marker" aria-hidden="true"><span class="scan-step-number">4</span><svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg></span>
+            <div><span class="scan-step-title">Results ready</span><span class="scan-step-caption">Explore your source-backed report</span></div>
+          </li>
+        </ol>
+        <div class="scan-progress-track" aria-hidden="true"><span id="scanProgressFill"></span></div>
+        <p id="scanStageDetail" class="scan-stage-detail" role="status" aria-live="polite">Preparing your scan…</p>
       </section>
 
       <!-- Threat Intelligence Dashboard -->
