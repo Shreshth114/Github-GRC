@@ -40,6 +40,8 @@ LLM triage is disabled by default and has not been live-verified. The web dashbo
 
 Render runs this single Express service on the free plan. It reads the platform `PORT`, binds to `0.0.0.0` and serves `public/`. Store `GITHUB_TOKEN` only in Render's environment settings. Use a read-only, narrowly scoped token. Never commit `.env`, credentials or generated credential-bearing caches.
 
-Scanning is limited to 300 eligible text files and files up to 300,000 bytes. Responses include actual scan counts and incomplete-scan indicators. Large repositories and GitHub rate limits can produce partial results. Browser monitoring uses polling, not webhooks or a durable background job. The free service can sleep when idle.
+Scanning is limited to 300 eligible text files, files up to 300,000 bytes and a 45-second scan budget. At most two scans run simultaneously on this demo. Each scan resolves a commit SHA and uses that immutable revision for both the tree and file contents. Responses include actual scan counts and incomplete-scan indicators. Large repositories and GitHub rate limits can produce partial results. Browser monitoring checks five seconds after the preceding check and scan finish; requests do not overlap. Stop cancels pending requests and stale results are discarded. Failed or transiently incomplete scans retry the same revision before advancing their baseline. Monitoring is browser polling, not webhooks or a durable background job. The free service can sleep when idle.
 
 See [deployment review and verification](docs/RENDER_DEPLOYMENT.md).
+
+The API returns distinct not-found, quota, permission, credential and timeout errors without exposing upstream bodies or headers. Copy/download actions export clearly labelled remediation examples, not repository-derived patches. Frontend tests use jsdom with mocked APIs and controlled timers; these do not replace visual browser verification. See [reliability fixes](docs/GRC_RELIABILITY_FIXES.md).

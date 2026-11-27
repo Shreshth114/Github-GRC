@@ -27,5 +27,8 @@
   },
   "overrides": {
     "qs": "^6.17.1"
+  },
+  "devDependencies": {
+    "jsdom": "^31.0.1"
   }
 }

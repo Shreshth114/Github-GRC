@@ -37,7 +37,7 @@
     <main class="container">
       <section class="scan-box glass-card accent-glow">
         <h2>Initiate Intelligence Scan</h2>
-        <p class="subtitle">Perform deep threat telemetry analysis, credential propagation correlation, and live pipeline monitoring.</p>
+        <p class="subtitle">Scan public repository files for credential patterns and monitor commits. Findings require source review.</p>
         
         <div class="input-group">
           <input
@@ -63,30 +63,14 @@
         </div>
       </section>
 
-      <!-- Advanced Timeline & Loading State -->
-      <section id="timelineSection" class="timeline-section glass-card hidden">
-        <div class="timeline-container">
-          <div class="timeline-step" id="step1">
-            <div class="step-icon"><div class="spinner-small"></div></div>
-            <span class="step-text" id="loadText1">Ingesting Repository...</span>
-          </div>
-          <div class="timeline-step" id="step2">
-            <div class="step-icon"></div>
-            <span class="step-text" id="loadText2">Hunting Credentials...</span>
-          </div>
-          <div class="timeline-step" id="step3">
-            <div class="step-icon"></div>
-            <span class="step-text" id="loadText3">Tracing Propagation...</span>
-          </div>
-          <div class="timeline-step" id="step4">
-            <div class="step-icon"></div>
-            <span class="step-text" id="loadText4">Generating Intelligence...</span>
-          </div>
-        </div>
+      <p id="scanFeedback" role="status" aria-live="polite" hidden></p>
+      <section id="timelineSection" class="timeline-section glass-card hidden" role="status" aria-live="polite">
+        <span class="spinner-small" aria-hidden="true"></span> Reading repository files and checking patterns…
       </section>
 
       <!-- Threat Intelligence Dashboard -->
       <section id="results" class="results-dashboard hidden">
+        <p id="resultsSource" class="subtitle sm"></p>
         
         <!--- Optional Display for Monitor Active Mode --->
         <div id="activeMonitorAlert" class="monitor-top-alert hidden">
@@ -105,7 +89,7 @@
                 <li><span class="metric-lbl">Target:</span> <strong id="monRepoName" class="ellipse-text">-</strong></li>
                 <li><span class="metric-lbl">Status:</span> <strong id="monStatusLbl" style="color:var(--green)">Active</strong></li>
                 <li><span class="metric-lbl">Last Commit:</span> <strong id="monLastSha">-</strong></li>
-                <li><span class="metric-lbl">Interval:</span> <strong>2 seconds</strong></li>
+                <li><span class="metric-lbl">Interval:</span> <strong>5 seconds after each completed check</strong></li>
               </ul>
               
               <div class="activity-feed-wrapper">
@@ -118,7 +102,7 @@
             
             <!-- Circular Gauge & Score -->
             <div class="glass-card flex-col-center">
-              <h3>Security Index</h3>
+              <h3>Heuristic Security Index</h3>
               <div class="gauge-container">
                 <div id="scoreGauge" class="gauge"></div>
                 <div class="gauge-inner">
@@ -127,12 +111,12 @@
               </div>
               
               <div class="risk-highlight mt-4">
-                <span class="metric-lbl">Breach Risk:</span> 
+                <span class="metric-lbl">Pattern severity:</span>
                 <strong id="breachRiskLabel" class="glow-val">UNKNOWN</strong>
               </div>
               <div class="risk-highlight no-border">
-                <span class="metric-lbl">Exploit Likelihood:</span> 
-                <strong id="exploitLikelihoodVal">0%</strong>
+                <span class="metric-lbl">Heuristic risk indicator:</span>
+                <strong id="exploitLikelihoodVal">0/100</strong>
               </div>
             </div>
 
@@ -193,14 +177,14 @@
             
             <!-- CI/CD Pipeline Detection -->
             <div class="glass-card cicd-card hidden" id="cicdCard">
-              <h3 style="color:var(--red)"><svg width="14" height="14" viewBox="0 0 24 24" fill="var(--red)" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg> CI/CD Leak Detected</h3>
-              <p class="subtitle sm text-danger">A secret was exposed inside a deployment pipeline configuration!</p>
+              <h3 style="color:var(--red)"><svg width="14" height="14" viewBox="0 0 24 24" fill="var(--red)" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg> CI/CD Pattern Matches</h3>
+              <p class="subtitle sm text-danger">A detection rule matched a pipeline file. Review the source to confirm its meaning.</p>
               <ul id="cicdList" class="heatmap-list mt-3"></ul>
             </div>
 
             <!-- Credential Propagation Analysis -->
             <div class="glass-card prop-card hidden" id="propCard">
-              <h3>Credential Propagation Radius</h3>
+              <h3>Repeated Pattern Matches</h3>
               <div id="propList" class="prop-tree">
                 <!-- JS Population: Propagation Tree -->
               </div>

@@ -53,6 +53,10 @@ const liveAlertText = document.getElementById("liveAlertText");
 const closeAlertBtn = document.getElementById("closeAlertBtn");
 
 let monitorInterval = null;
+let monitoring = false;
+let monitorSession = 0;
+let monitorController = null;
+let scanInProgress = false;
 let currentRepoUrl = "";
 let lastCommitSha = null;
 let lastKnownIssues = []; // Cache to diff
@@ -74,12 +78,12 @@ const classificationDict = {
     suggested: 'const pkey = loadSecureKeyFromHSM();',
     recom: ["Revoke the compromised certificate/key", "Generate new keys via secure terminal", "Implement Hardware Security Module (HSM)"]
   },
-  "Potential private SSH key detected": {
-    type: "Cryptographic Key", impact: "HIGH", baseConf: 85,
-    attackPaths: ["Acquire SSH credentials", "Bypass server auth mechanisms", "Remote executing (RCE)"],
+  "Public SSH key reference": {
+    type: "Public Key Reference", impact: "LOW", baseConf: 30,
+    attackPaths: ["Review intended access", "Confirm key ownership"],
     detected: 'ssh-rsa AAAAB3NzaC1... user@host',
     suggested: '// Key correctly moved out of application logic',
-    recom: ["Remove `authorized_keys` entry mapping to this key", "Deploy an SSH certificate authority", "Ban key fingerprint across fleets"]
+    recom: ["Public keys are not private credentials", "Confirm that the key is intended and its access remains appropriate"]
   },
   "Firebase API key pattern detected": {
     type: "Service Credential", impact: "HIGH", baseConf: 88,
@@ -117,11 +121,11 @@ const classificationDict = {
     recom: ["Identify the context of the generic secret", "Rotate sequence logic", "Avoid hardcoding any strings labeled 'secret'"]
   },
   ".env reference found": {
-    type: "Config Exposure", impact: "CRITICAL", baseConf: 99,
-    attackPaths: ["Index configuration files", "Mass extraction of credentials", "Total Environment Takeover"],
-    detected: 'File: .env (committed to repo)',
+    type: "Configuration Reference", impact: "LOW", baseConf: 30,
+    attackPaths: ["Review the referenced configuration"],
+    detected: 'A .env reference was matched; this alone does not establish an exposed file',
     suggested: '# Add .env to .gitignore\\nnode_modules/\\n.env',
-    recom: ["Delete file from Git tracking (`git rm --cached .env`)", "Assess EVERY key inside .env as compromised", "Mass-rotate all variables"]
+    recom: ["Check whether the reference points to a committed secret file or documentation", "Keep real credential files out of Git", "Rotate credentials only if exposure is confirmed"]
   }
 };
 
@@ -150,31 +154,29 @@ function updateGauge(score) {
 
 function renderTimeline() {
   timelineSection.classList.remove("hidden");
-  const steps = [
-    document.getElementById("step1"), document.getElementById("step2"),
-    document.getElementById("step3"), document.getElementById("step4")
-  ];
-  steps.forEach(s => { s.classList.remove("active", "done"); });
-  return new Promise(resolve => {
-    steps[0].classList.add("active");
-    setTimeout(() => { steps[0].classList.replace("active", "done"); steps[1].classList.add("active"); }, 800);
-    setTimeout(() => { steps[1].classList.replace("active", "done"); steps[2].classList.add("active"); }, 1600);
-    setTimeout(() => { steps[2].classList.replace("active", "done"); steps[3].classList.add("active"); }, 2400);
-    setTimeout(() => { steps[3].classList.replace("active", "done"); setTimeout(() => resolve(), 300); }, 3200);
-  });
 }
 
 function attachFixHandlers(buttonId, snippet) {
   const btn = document.getElementById(buttonId);
   if (!btn) return;
-  btn.addEventListener("click", () => {
+  btn.addEventListener("click", async () => {
     if (buttonId.includes("copy")) {
-      navigator.clipboard.writeText(snippet);
-      btn.textContent = "Copied!"; setTimeout(() => btn.textContent = "Copy Fix", 2000);
+      try {
+        if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable');
+        await navigator.clipboard.writeText(snippet);
+        btn.textContent = "Copied!";
+        setTimeout(() => { btn.textContent = "Copy example"; }, 2000);
+      } catch {
+        showFeedback('Could not copy to the clipboard. You can select the displayed example or download it.', true);
+      }
     } else {
-      const blob = new Blob([snippet], { type: 'text/javascript' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a'); a.href = url; a.download = 'remediation_patch.js'; a.click(); URL.revokeObjectURL(url);
+      try {
+        const blob = new Blob([snippet], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a'); a.href = url; a.download = 'remediation_example.txt';
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 0);
+      } catch { showFeedback('Could not download the example. You can select the displayed text.', true); }
     }
   });
 }
@@ -192,7 +194,7 @@ function renderUI(data, durationMs, repoUrl, isSilent) {
   });
 
   // --- Breach Risk: count-based, not score-based ---
-  let riskAssessment = "SECURE";
+  let riskAssessment = "NO MATCHES";
   if (high >= 1) { riskAssessment = "CRITICAL"; breachRiskLabel.className = "glow-val red"; }
   else if (medium >= 2) { riskAssessment = "HIGH"; breachRiskLabel.className = "glow-val orange"; }
   else if (medium >= 1) { riskAssessment = "MEDIUM"; breachRiskLabel.className = "glow-val yellow"; }
@@ -202,7 +204,7 @@ function renderUI(data, durationMs, repoUrl, isSilent) {
 
   // --- Exploit Likelihood: deterministic formula ---
   let exploitVal = Math.min(100, (high * 40) + (medium * 15) + (low * 3));
-  exploitLikelihoodVal.textContent = exploitVal + "%";
+  exploitLikelihoodVal.textContent = exploitVal + "/100";
 
   let vis = "Public", st = 0, fk = 0, branchName = "main";
   if (data.repoMeta) { vis = data.repoMeta.visibility; st = data.repoMeta.stars; fk = data.repoMeta.forks; branchName = data.repoMeta.branch; }
@@ -230,14 +232,14 @@ function renderUI(data, durationMs, repoUrl, isSilent) {
     aiInsightsHTML += "<p>No heuristic matches found in scanned files.</p>";
   }
   if (data.scanMeta && !data.scanMeta.complete) {
-    aiInsightsHTML += `<p>Partial scan: ${data.scanMeta.filesScanned} files scanned, ${data.scanMeta.filesSkipped} skipped, ${data.scanMeta.filesFailed} failed. File or tree limits reached: ${Boolean(data.scanMeta.truncated)}.</p>`;
+    aiInsightsHTML += `<p>Partial scan: ${data.scanMeta.filesScanned} files scanned, ${data.scanMeta.filesSkipped} skipped, ${data.scanMeta.filesFailed} failed, ${data.scanMeta.filesUnprocessed || 0} not processed. File or tree limits reached: ${Boolean(data.scanMeta.truncated)}. ${escapeHTML(data.scanMeta.stopReason || '')}</p>`;
   }
 
   // Delta Warning Generation during Live Monitor
-  if (isSilent && lastKnownIssues.length > 0) {
+  if (isSilent) {
      const newItems = data.issues.filter(i => !lastKnownIssues.some(old => old.file === i.file && old.message === i.message));
      if(newItems.length > 0) {
-        liveAlertText.textContent = `New ${newItems[0].message} detected in ${newItems[0].file} after commit ${lastCommitSha ? lastCommitSha.substring(0,6) : 'unknown'}.`;
+        liveAlertText.textContent = `New ${newItems[0].message} detected in ${newItems[0].file} at commit ${data.repoMeta.commitSha.substring(0,7)}.`;
         liveAlertBanner.classList.remove("hidden");
      }
   }
@@ -295,7 +297,7 @@ function renderUI(data, durationMs, repoUrl, isSilent) {
         </div>
       </div>
       <div class="confidence-block">
-        Conf: <span class="confidence-val" style="border-color:${conf>85?'var(--green)':'var(--orange)'};">${conf}%</span>
+        Rule weight: <span class="confidence-val" style="border-color:${conf>85?'var(--green)':'var(--orange)'};">${conf}/100</span>
       </div>
     `;
 
@@ -317,14 +319,14 @@ function renderUI(data, durationMs, repoUrl, isSilent) {
         </div>
       </div>
       <div class="code-suggestion-block">
-        <h5>Code Fix Generator</h5>
+        <h5>Illustrative remediation — not source code or an automatic patch</h5>
         <div class="code-diff">
-          <div class="code-line detected">${classification.detected}</div>
-          <div class="code-line secure">${classification.suggested}</div>
+          <div class="code-line detected">${escapeHTML(classification.detected)}</div>
+          <div class="code-line secure">${escapeHTML(classification.suggested)}</div>
         </div>
         <div class="automation-actions">
-           <button class="btn-sm" id="copyFix_${idx}">Copy Fix</button>
-           <button class="btn-sm" id="dlPatch_${idx}">Download Patch</button>
+           <button class="btn-sm" id="copyFix_${idx}">Copy example</button>
+           <button class="btn-sm" id="dlPatch_${idx}">Download example</button>
         </div>
       </div>
     `;
@@ -333,10 +335,8 @@ function renderUI(data, durationMs, repoUrl, isSilent) {
     card.appendChild(body);
     issuesListEl.appendChild(card);
     
-    setTimeout(() => {
-       attachFixHandlers(`copyFix_${idx}`, classification.suggested);
-       attachFixHandlers(`dlPatch_${idx}`, classification.suggested);
-    }, 0);
+    attachFixHandlers(`copyFix_${idx}`, classification.suggested);
+    attachFixHandlers(`dlPatch_${idx}`, classification.suggested);
   });
 
   summaryTotal.textContent = `${data.issues.length} Findings`;
@@ -346,7 +346,7 @@ function renderUI(data, durationMs, repoUrl, isSilent) {
   if (cicdMatches.length > 0) {
     cicdCard.classList.remove("hidden"); cicdCard.classList.add("glow-card");
     cicdMatches.slice(0, 4).forEach(c => { const li = document.createElement("li"); li.textContent = c; cicdList.appendChild(li); });
-    aiInsightsHTML += `<p><span style="color:var(--red)">CI/CD Vulnerability:</span> Secrets found within deployment pipeline configurations, risking mass leakage in build logs.</p>`;
+    aiInsightsHTML += `<p><span style="color:var(--red)">CI/CD review:</span> Patterns matched in pipeline files. Review the source before classifying them as leaked credentials.</p>`;
   } else { cicdCard.classList.add("hidden"); }
 
   propList.innerHTML = "";
@@ -361,7 +361,7 @@ function renderUI(data, durationMs, repoUrl, isSilent) {
   });
   if (propagationFound) {
     propCard.classList.remove("hidden");
-    aiInsightsHTML += `<p><span style="color:var(--orange)">Propagation Risk:</span> The same credential pattern was flagged across multiple separate files, indicating systemic poor secret management.</p>`;
+    aiInsightsHTML += `<p><span style="color:var(--orange)">Repeated patterns:</span> The same rule matched multiple files. This does not establish that the same credential was reused.</p>`;
   } else { propCard.classList.add("hidden"); }
 
   attackChainWrapper.innerHTML = "";
@@ -376,32 +376,41 @@ function renderUI(data, durationMs, repoUrl, isSilent) {
       });
       attackChainWrapper.appendChild(d);
     });
-    aiInsightsHTML += `<p><span style="color:var(--yellow)">Exploit Vector:</span> Attack paths verify that attackers tracking these exposures could easily pivot into deep infrastructure.</p>`;
+    aiInsightsHTML += `<p><span style="color:var(--yellow)">Illustrative attack paths:</span> These are generic scenarios for review, not verified exploits.</p>`;
   } else { attackChainCard.classList.add("hidden"); }
   
-  if(ampLabel === "HIGH") { aiInsightsHTML += `<p><span style="color:var(--orange)">Exposure Amplifier:</span> High reputation public repository implies an exponentially larger attacker discovery window.</p>`; }
+  if(ampLabel === "HIGH") { aiInsightsHTML += `<p>Repository popularity contributes to the heuristic exposure indicator; it does not measure compromise likelihood.</p>`; }
 
   // Improved intelligence summary for LOW-only results
   if (high === 0 && medium === 0 && low > 0 && aiInsightsHTML === "") {
     aiInsightsHTML = `<p><span style="color:var(--green)">Minor Patterns:</span> Minor development credential patterns detected. No confirmed credential leaks. These findings are informational and represent low-confidence matches commonly found in documentation, test suites, or placeholder configurations.</p>`;
   }
 
-  if(aiInsightsHTML !== "") intelSummary.innerHTML = aiInsightsHTML;
+  intelSummary.innerHTML = aiInsightsHTML || '<p>Review the matched patterns against their source files.</p>';
+  document.getElementById('resultsSource').textContent = `${repoUrl} · commit ${data.repoMeta.commitSha}`;
 
   if (!isSilent) saveHistory(repoUrl, score);
 }
 
+function readHistory() {
+  try {
+    const hist = JSON.parse(localStorage.getItem('scanHistory') || '[]');
+    return Array.isArray(hist) ? hist.filter(h => h && typeof h.repo === 'string' &&
+      Number.isFinite(h.score) && h.score >= 0 && h.score <= 100).slice(0, 5) : [];
+  } catch { return []; }
+}
+
 function saveHistory(repo, score) {
-  let hist = JSON.parse(localStorage.getItem("scanHistory") || "[]");
+  let hist = readHistory();
   hist = hist.filter(h => h.repo !== repo);
   hist.unshift({ repo, score });
   if (hist.length > 5) hist.pop();
-  localStorage.setItem("scanHistory", JSON.stringify(hist));
+  try { localStorage.setItem("scanHistory", JSON.stringify(hist)); } catch { /* History is optional. */ }
   renderHistory();
 }
 
 function renderHistory() {
-  let hist = JSON.parse(localStorage.getItem("scanHistory") || "[]");
+  let hist = readHistory();
   historyList.innerHTML = "";
   if (hist.length === 0) { historyList.innerHTML = "<li style='color:var(--text-muted)'>No previous scans stored.</li>"; return; }
   hist.forEach(h => {
@@ -429,122 +438,180 @@ function logActivity(msg) {
   activityFeed.scrollTop = activityFeed.scrollHeight;
 }
 
-async function doSilentScan() {
-  const startTime = performance.now();
-  try {
-    const response = await fetch("/scan", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ repoUrl: currentRepoUrl })
-    });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error);
-    renderUI(data, performance.now() - startTime, currentRepoUrl, true);
-  } catch(e) { logActivity(`Scan error: ${e.message}`); }
+function showFeedback(message, isError = false) {
+  const el = document.getElementById('scanFeedback');
+  el.textContent = message;
+  el.classList.toggle('error', isError);
+  el.hidden = !message;
 }
 
-async function pollCommit() {
+async function requestJSON(route, payload, signal) {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  if (signal?.aborted) abort();
+  else signal?.addEventListener('abort', abort, { once: true });
+  const timer = setTimeout(abort, 60000);
   try {
-    const response = await fetch("/latest-commit", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ repoUrl: currentRepoUrl })
-    });
-    const data = await response.json();
-    if (response.ok && data.sha) {
-      if (!lastCommitSha) {
-        lastCommitSha = data.sha;
-        monLastSha.textContent = data.sha.substring(0, 7);
-        logActivity(`Initial commit established: ${data.sha.substring(0, 7)}`);
-      } else if (data.sha !== lastCommitSha) {
-        logActivity(`New commit detected: ${data.sha.substring(0, 7)}`);
-        logActivity(`Security scan started...`);
-        lastCommitSha = data.sha;
-        monLastSha.textContent = data.sha.substring(0, 7);
-        await doSilentScan();
-      } else {
-        logActivity("No new commits detected.");
-      }
-    } else { logActivity("Failed to resolve commit data."); }
-  } catch(e) { 
-    console.error(e);
-    logActivity("Monitoring error but continuing..."); 
+    const response = await fetch(route, { method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), signal: controller.signal });
+    let data;
+    try { data = await response.json(); }
+    catch { throw new Error('The service returned an invalid response. Please retry.'); }
+    if (!data || typeof data !== 'object') throw new Error('The service returned an invalid response. Please retry.');
+    if (!response.ok) {
+      const error = new Error(data.error || 'Request failed. Please retry.');
+      error.status = response.status;
+      error.code = data.code;
+      error.retryAfter = Number(response.headers?.get('Retry-After')) || 0;
+      throw error;
+    }
+    if (route === '/scan' && (!Array.isArray(data.issues) || !data.issues.every(issue => issue &&
+        ['LOW', 'MEDIUM', 'HIGH'].includes(issue.severity) && typeof issue.file === 'string' && typeof issue.message === 'string') ||
+        !Number.isFinite(data.score) || data.score < 0 || data.score > 100 ||
+        !/^[a-f0-9]{40}$/i.test(data.repoMeta?.commitSha || ''))) {
+      throw new Error('The service returned incomplete scan data. Please retry.');
+    }
+    return data;
+  } catch (error) {
+    if (error.name === 'AbortError' && !signal?.aborted) throw new Error('The request timed out. Please retry.');
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', abort);
+  }
+}
+
+function setMonitorStatus(text) {
+  document.getElementById('monStatusLbl').textContent = text;
+  document.getElementById('monStatusLbl').style.color = monitoring ? 'var(--green)' : 'var(--text-muted)';
+}
+
+async function doSilentScan(sha, session) {
+  const started = performance.now();
+  renderTimeline();
+  setMonitorStatus('Scanning');
+  const data = await requestJSON('/scan', { repoUrl: currentRepoUrl, commitSha: sha }, monitorController.signal);
+  if (!monitoring || session !== monitorSession) return;
+  if (data.repoMeta.commitSha !== sha) throw new Error('The scan revision did not match the requested commit. Retrying.');
+  renderUI(data, performance.now() - started, currentRepoUrl, lastCommitSha !== null);
+  resultsEl.classList.remove('hidden');
+  if (data.scanMeta?.filesFailed || data.scanMeta?.filesUnprocessed) {
+    const error = new Error('Scan incomplete. Partial results are shown; this commit will be retried.');
+    error.retryAfter = 60;
+    throw error;
+  }
+  // Advance the baseline only after a successful scan of that exact revision.
+  lastCommitSha = sha;
+  monLastSha.textContent = sha.substring(0, 7);
+  showFeedback(data.scanMeta?.complete ? 'Scan complete. Monitoring for new commits.' : 'Partial coverage: some files were excluded by scan limits.');
+}
+
+async function pollCommit(session = monitorSession) {
+  if (!monitoring || session !== monitorSession) return;
+  let delay = 5000;
+  try {
+    const data = await requestJSON('/latest-commit', { repoUrl: currentRepoUrl }, monitorController.signal);
+    if (!monitoring || session !== monitorSession) return;
+    if (!/^[a-f0-9]{40}$/i.test(data.sha || '')) throw new Error('The service returned an invalid commit reference.');
+    if (data.sha !== lastCommitSha) {
+      logActivity(`${lastCommitSha ? 'New commit' : 'Initial commit'}: ${data.sha.substring(0, 7)}. Scanning...`);
+      await doSilentScan(data.sha, session);
+      if (!monitoring || session !== monitorSession) return;
+      logActivity(`Scan finished for ${data.sha.substring(0, 7)}.`);
+    } else {
+      logActivity('No new commits detected.');
+    }
+    setMonitorStatus('Monitoring');
+  } catch (error) {
+    if (!monitoring || session !== monitorSession) return;
+    showFeedback(error.message, true);
+    logActivity(error.message);
+    delay = Math.max(delay, error.retryAfter * 1000 || 10000);
+    setMonitorStatus('Waiting to retry');
+    if ([403, 404, 422].includes(error.status) || error.code === 'github_auth_failed') stopLiveMonitoring();
+  } finally {
+    if (session === monitorSession) timelineSection.classList.add('hidden');
+    if (monitoring && session === monitorSession) {
+      // Schedule after completion; slow scans cannot overlap subsequent polls.
+      monitorInterval = setTimeout(() => pollCommit(session), delay);
+    }
   }
 }
 
 async function startLiveMonitoring() {
-  if (monitorInterval) return;
+  if (monitoring || scanInProgress) return;
   const repoUrl = repoInput.value.trim();
-  if (!repoUrl) { alert("Target URL required to start monitoring."); return; }
-  
-  // Set UI state
+  if (!repoUrl) { showFeedback('Enter a public GitHub repository URL.', true); return; }
+  monitoring = true;
+  const session = ++monitorSession;
+  monitorController = new AbortController();
   currentRepoUrl = repoUrl;
-  let shortName = repoUrl.replace("https://github.com/", ""); if(shortName.length > 25) shortName = shortName.substring(0, 25) + "...";
-  monRepoName.textContent = shortName;
-  
-  startMonBtn.classList.add("hidden");
-  stopMonBtn.classList.remove("hidden");
-  activeMonitorAlert.classList.remove("hidden");
-  liveMonitoringPanel.classList.remove("hidden");
-  scanBtn.disabled = true;
-  
-  activityFeed.innerHTML = "";
-  logActivity("Monitoring started.");
   lastCommitSha = null;
-  
-  // Run an initial scan if we don't have results visible
-  if (resultsEl.classList.contains("hidden")) {
-      await scanRepository();
-  } else {
-      await pollCommit(); // Grab the SHA immediately
-  }
-  
-  // Interval Loop
-  monitorInterval = setInterval(pollCommit, 2000);
+  lastKnownIssues = [];
+  monLastSha.textContent = '—';
+  monRepoName.textContent = repoUrl.replace('https://github.com/', '');
+  resultsEl.classList.add('hidden');
+  liveAlertBanner.classList.add('hidden');
+  startMonBtn.classList.add('hidden');
+  stopMonBtn.classList.remove('hidden');
+  activeMonitorAlert.classList.remove('hidden');
+  liveMonitoringPanel.classList.remove('hidden');
+  scanBtn.disabled = true;
+  repoInput.disabled = true;
+  activityFeed.innerHTML = '';
+  showFeedback('');
+  setMonitorStatus('Starting');
+  logActivity('Monitoring started.');
+  await pollCommit(session);
 }
 
 function stopLiveMonitoring() {
-  if (monitorInterval) clearInterval(monitorInterval);
+  monitoring = false;
+  monitorSession++;
+  if (monitorInterval !== null) clearTimeout(monitorInterval);
   monitorInterval = null;
-  logActivity("Monitoring stopped.");
-  
-  startMonBtn.classList.remove("hidden");
-  stopMonBtn.classList.add("hidden");
-  activeMonitorAlert.classList.add("hidden");
+  monitorController?.abort();
+  logActivity('Monitoring stopped.');
+  startMonBtn.classList.remove('hidden');
+  stopMonBtn.classList.add('hidden');
+  activeMonitorAlert.classList.add('hidden');
+  liveAlertBanner.classList.add('hidden');
+  timelineSection.classList.add('hidden');
   scanBtn.disabled = false;
-  liveAlertBanner.classList.add("hidden");
-  
-  document.getElementById("monStatusLbl").textContent = "Stopped";
-  document.getElementById("monStatusLbl").style.color = "var(--text-muted)";
+  repoInput.disabled = false;
+  setMonitorStatus('Stopped');
 }
 
-// -------------------------------------------------------------
-// Manual Action Trigger
-// -------------------------------------------------------------
 async function scanRepository() {
+  if (monitoring || scanInProgress) return;
   const repoUrl = repoInput.value.trim();
-  if (!repoUrl) { alert("Target URL required for intelligence gathering."); return; }
-
+  if (!repoUrl) { showFeedback('Enter a public GitHub repository URL.', true); return; }
+  scanInProgress = true;
   scanBtn.disabled = true;
-  resultsEl.classList.add("hidden");
-  
-  const startTime = performance.now();
-  await renderTimeline();
-
+  startMonBtn.disabled = true;
+  repoInput.disabled = true;
+  resultsEl.classList.add('hidden');
+  liveAlertBanner.classList.add('hidden');
+  lastKnownIssues = [];
+  showFeedback('');
+  renderTimeline();
+  const started = performance.now();
   try {
-    const response = await fetch("/scan", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ repoUrl })
-    });
-    const data = await response.json();
-    const durationMs = performance.now() - startTime;
-    if (!response.ok) throw new Error(data.error || "Reconnaissance failed");
-
-    renderUI(data, durationMs, repoUrl, false);
-    resultsEl.classList.remove("hidden");
+    const data = await requestJSON('/scan', { repoUrl });
+    renderUI(data, performance.now() - started, repoUrl, false);
+    resultsEl.classList.remove('hidden');
+    showFeedback(data.scanMeta?.complete ? 'Scan complete.' : 'Partial scan: review the coverage details in the summary.');
   } catch (error) {
-    alert(`Intelligence Gathering Error: ${error.message}`);
+    showFeedback(error.message, true);
   } finally {
-    timelineSection.classList.add("hidden");
-    if(!monitorInterval) scanBtn.disabled = false;
+    scanInProgress = false;
+    scanBtn.disabled = false;
+    startMonBtn.disabled = false;
+    repoInput.disabled = false;
+    timelineSection.classList.add('hidden');
   }
 }
 
-scanBtn.addEventListener("click", scanRepository);
-startMonBtn.addEventListener("click", startLiveMonitoring);
-stopMonBtn.addEventListener("click", stopLiveMonitoring);
+scanBtn.addEventListener('click', scanRepository);
+startMonBtn.addEventListener('click', startLiveMonitoring);
+stopMonBtn.addEventListener('click', stopLiveMonitoring);

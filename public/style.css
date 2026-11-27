@@ -236,3 +236,10 @@ button:disabled { background: #334155; color: #94a3b8; box-shadow: none; cursor:
 .code-line.detected { background: rgba(239, 68, 68, 0.1); color: #fca5a5; }
 .code-line.secure { background: rgba(16, 185, 129, 0.1); color: #6ee7b7; border-left: 3px solid var(--green);}
 .automation-actions { display: flex; gap: 12px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border-glass);}
+
+#scanFeedback { margin: 20px 0; padding: 14px 18px; border: 1px solid var(--border-glass); border-radius: 12px; overflow-wrap: anywhere; }
+#scanFeedback.error { color: var(--red); }
+#resultsSource { overflow-wrap: anywhere; }
+#timelineSection { display: flex; align-items: center; gap: 16px; }
+#timelineSection.hidden { display: none; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }

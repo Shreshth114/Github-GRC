@@ -35,6 +35,16 @@ test('CI reports and annotations do not reproduce matched credentials', () => {
   const sarif = generateSarifReport(issues);
   assert.equal(sarif.runs[0].results[0].locations[0].physicalLocation.region.startLine, 3);
 });
+test('private-key headers are detected while public SSH keys are not called private', () => {
+  for (const kind of ['', 'RSA ', 'EC ', 'DSA ', 'OPENSSH ']) {
+    const header = '-----BEGIN ' + kind + 'PRIVATE KEY' + '-----';
+    assert.ok(scanContent(header, 'config.txt').some(f => f.message === 'Private key exposed' && f.severity === 'HIGH'));
+  }
+  const publicKey = 'ssh-' + 'rsa ' + 'A'.repeat(40);
+  const findings = scanContent(publicKey, 'authorized_keys');
+  assert.ok(findings.every(f => f.severity !== 'HIGH'));
+  assert.ok(findings.some(f => f.message === 'Public SSH key reference'));
+});
 test('repository-controlled text is escaped for HTML rendering', () => {
   const source = readFileSync('public/script.js', 'utf8');
   const escape = source.match(/function escapeHTML\(value\) \{[\s\S]*?\n\}/)[0];
