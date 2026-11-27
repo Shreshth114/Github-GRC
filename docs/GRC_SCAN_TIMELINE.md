@@ -22,4 +22,6 @@ No backend files, API contracts, scanner rules, provider credentials or CampusDe
 
 `npx --yes --package=node@24 -- npm test`: **34 passed, 0 failed, 0 skipped**. `git diff --check`: passed. Existing error, isolation, retry, cancellation, history and Action tests remain enabled.
 
-BrowserOS tools remain unavailable; state transitions are verified using the actual HTML/script in DOM tests, not a visual browser walkthrough. Live rollout and served-file verification will be recorded once deployment completes.
+BrowserOS tools remain unavailable; state transitions are verified using the actual HTML/script in DOM tests, not a visual browser walkthrough. Render deployment `dep-dc4qaqlbedkc73dv761g` is live with source `fd07d558b28bd8e04bc4670931b1bb6eb9175a91`. CI passed: https://github.com/Shreshth114/Github-GRC/actions/runs/46027605921.
+
+The live HTML, CSS and JavaScript matched the tested files byte-for-byte. An API-backed DOM check with animations enabled ran a real scan of the public Node-Health-checkup repository: observed workflow states were preparation, source scan, report building and completion; all four markers completed and results became visible. The request started immediately. The final detail was `Scan complete · 2 files scanned · 0 pattern matches.` This verifies deployed behavior, not visual browser rendering. Backend files and API behavior remain unchanged.
