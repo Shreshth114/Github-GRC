@@ -124,7 +124,7 @@ const classificationDict = {
     type: "Configuration Reference", impact: "LOW", baseConf: 30,
     attackPaths: ["Review the referenced configuration"],
     detected: 'A .env reference was matched; this alone does not establish an exposed file',
-    suggested: '# Add .env to .gitignore\\nnode_modules/\\n.env',
+    suggested: '# Add .env to .gitignore\nnode_modules/\n.env',
     recom: ["Check whether the reference points to a committed secret file or documentation", "Keep real credential files out of Git", "Rotate credentials only if exposure is confirmed"]
   }
 };
@@ -146,7 +146,7 @@ function updateGauge(score) {
   else if (score >= 70) { color = "var(--yellow)"; label = "LOW RISK"; }
   else if (score >= 50) { color = "var(--orange)"; label = "MODERATE RISK"; }
   else if (score >= 30) { color = "var(--orange)"; label = "HIGH RISK"; }
-  
+
   scoreValue.textContent = score;
   scoreValue.style.color = color;
   scoreGauge.style.background = `conic-gradient(${color} ${score * 3.6}deg, var(--bg-glass) 0deg)`;
@@ -243,89 +243,54 @@ function attachFixHandlers(buttonId, snippet) {
   });
 }
 
-function renderUI(data, durationMs, repoUrl, isSilent) {
-  const score = data.score || 0;
-  updateGauge(score);
-  
-  // --- First pass: count severities for risk logic ---
-  let high = 0, medium = 0, low = 0;
-  data.issues.forEach(issue => {
-    if (issue.severity === "HIGH") high++;
-    else if (issue.severity === "MEDIUM") medium++;
-    else low++;
+const FINDINGS_PAGE_SIZE = 6;
+let sortedFindings = [];
+let findingsPage = 0;
+let expandedFindings = new Set();
+
+function renderFindingsPage() {
+  issuesListEl.replaceChildren();
+  const start = findingsPage * FINDINGS_PAGE_SIZE;
+  const visible = sortedFindings.slice(start, start + FINDINGS_PAGE_SIZE);
+  for (let offset = 0; offset < visible.length; offset++) {
+    appendFindingCard(visible[offset], start + offset);
+  }
+  if (!sortedFindings.length) {
+    const empty = document.createElement('p');
+    empty.className = 'findings-empty';
+    empty.textContent = 'No matching patterns found in the scanned files. This does not establish security or compliance.';
+    issuesListEl.appendChild(empty);
+  }
+  document.getElementById('findingsRange').textContent = sortedFindings.length
+    ? `${start + 1}–${Math.min(start + FINDINGS_PAGE_SIZE, sortedFindings.length)} of ${sortedFindings.length} findings · Highest severity first`
+    : 'No findings';
+  document.querySelector('.findings-guide').textContent = start === 0 && sortedFindings.length > 2
+    ? 'The first two findings are expanded. Open any row to inspect its details.'
+    : 'Open or close any finding to inspect its details. Severity and source stay visible.';
+  document.getElementById('findingsPagination').hidden = sortedFindings.length <= FINDINGS_PAGE_SIZE;
+  document.getElementById('findingsPrevious').disabled = findingsPage === 0;
+  document.getElementById('findingsNext').disabled = start + FINDINGS_PAGE_SIZE >= sortedFindings.length;
+  document.getElementById('findingsPageLabel').textContent = `Page ${findingsPage + 1} of ${Math.max(1, Math.ceil(sortedFindings.length / FINDINGS_PAGE_SIZE))}`;
+}
+
+function changeFindingsPage(delta) {
+  const next = findingsPage + delta;
+  if (next < 0 || next * FINDINGS_PAGE_SIZE >= sortedFindings.length) return;
+  // Capture native details state before replacing the current page.
+  issuesListEl.querySelectorAll('details').forEach(card => {
+    const index = Number(card.dataset.findingIndex);
+    if (card.open) expandedFindings.add(index); else expandedFindings.delete(index);
   });
+  findingsPage = next;
+  renderFindingsPage();
+}
 
-  // --- Breach Risk: count-based, not score-based ---
-  let riskAssessment = "NO MATCHES";
-  if (high >= 1) { riskAssessment = "CRITICAL"; breachRiskLabel.className = "glow-val red"; }
-  else if (medium >= 2) { riskAssessment = "HIGH"; breachRiskLabel.className = "glow-val orange"; }
-  else if (medium >= 1) { riskAssessment = "MEDIUM"; breachRiskLabel.className = "glow-val yellow"; }
-  else if (low >= 1) { riskAssessment = "LOW"; breachRiskLabel.className = "glow-val green"; }
-  else { breachRiskLabel.className = "glow-val green"; }
-  breachRiskLabel.textContent = riskAssessment;
+document.getElementById('findingsPrevious').addEventListener('click', () => changeFindingsPage(-1));
+document.getElementById('findingsNext').addEventListener('click', () => changeFindingsPage(1));
 
-  // --- Exploit Likelihood: deterministic formula ---
-  let exploitVal = Math.min(100, (high * 40) + (medium * 15) + (low * 3));
-  exploitLikelihoodVal.textContent = exploitVal + "/100";
-
-  let vis = "Public", st = 0, fk = 0, branchName = "main";
-  if (data.repoMeta) { vis = data.repoMeta.visibility; st = data.repoMeta.stars; fk = data.repoMeta.forks; branchName = data.repoMeta.branch; }
-  repoVisibility.textContent = vis; repoStars.textContent = st; repoForks.textContent = fk;
-  
-  let ampClass = "green", ampLabel = "LOW";
-  let visScore = vis.toLowerCase() === "public" ? 50 : 0;
-  if ((visScore + st + (fk*2)) > 100) { ampLabel = "HIGH"; ampClass = "red"; }
-  else if ((visScore + st) > 50) { ampLabel = "MEDIUM"; ampClass = "orange"; }
-  ampFactorLabel.textContent = ampLabel; ampFactorLabel.className = `glow-val ${ampClass}`;
-
-  if (metricFiles) metricFiles.textContent = data.scanMeta?.filesScanned ?? "Unavailable";
-  if (metricTime) metricTime.textContent = (durationMs/1000).toFixed(2) + "s";
-  if (metricBranch) metricBranch.textContent = branchName;
-
-  issuesListEl.innerHTML = "";
-  
-  const propagationMap = {}; 
-  const cicdMatches = [];
-  const attackChains = new Set();
-  let aiInsightsHTML = "";
-
-  if (data.issues.length === 0) {
-    issuesListEl.innerHTML = "<div class='glass-card' style='text-align:center;color:var(--green);'>No matching patterns found in the scanned files. This does not establish security or compliance.</div>";
-    aiInsightsHTML += "<p>No heuristic matches found in scanned files.</p>";
-  }
-  if (data.scanMeta && !data.scanMeta.complete) {
-    aiInsightsHTML += `<p>Partial scan: ${data.scanMeta.filesScanned} files scanned, ${data.scanMeta.filesSkipped} skipped, ${data.scanMeta.filesFailed} failed, ${data.scanMeta.filesUnprocessed || 0} not processed. File or tree limits reached: ${Boolean(data.scanMeta.truncated)}. ${escapeHTML(data.scanMeta.stopReason || '')}</p>`;
-  }
-
-  // Delta Warning Generation during Live Monitor
-  if (isSilent) {
-     const newItems = data.issues.filter(i => !lastKnownIssues.some(old => old.file === i.file && old.message === i.message));
-     if(newItems.length > 0) {
-        liveAlertText.textContent = `New ${newItems[0].message} detected in ${newItems[0].file} at commit ${data.repoMeta.commitSha.substring(0,7)}.`;
-        liveAlertBanner.classList.remove("hidden");
-     }
-  }
-  lastKnownIssues = data.issues;
-
-  data.issues.forEach((issue, idx) => {
-    // (counts already computed above)
-    
-    if(!propagationMap[issue.message]) propagationMap[issue.message] = new Set();
-    propagationMap[issue.message].add(issue.file);
-
-    const lowerFile = issue.file.toLowerCase();
-    if (lowerFile.includes(".github/workflows") || lowerFile.includes(".gitlab-ci") || lowerFile.includes("jenkinsfile") || lowerFile.includes("circleci") || lowerFile.includes("azure-pipelines")) {
-      cicdMatches.push(`${issue.file} [${issue.severity}]`);
-    }
-
-    const classification = getClassification(issue.message);
-
-    // Only build attack chains for HIGH/MEDIUM findings
-    if (issue.severity !== "LOW") {
-      let chainStr = [classification.type, ...classification.attackPaths].join("||");
-      attackChains.add(chainStr);
-    }
-
+function appendFindingCard(issue, idx) {
+  const classification = getClassification(issue.message);
+  const lowerFile = issue.file.toLowerCase();
     let conf = classification.baseConf;
     if (lowerFile.endsWith(".json") || lowerFile.endsWith(".env") || lowerFile.includes("config")) conf += 12;
 
@@ -337,38 +302,47 @@ function renderUI(data, durationMs, repoUrl, isSilent) {
     }
     if (conf > 99) conf = 99;
 
-    const card = document.createElement("div");
+    const card = document.createElement("details");
+    card.open = expandedFindings.has(idx);
+    const expandedForScan = expandedFindings;
+    card.dataset.findingIndex = idx;
+    card.dataset.severity = issue.severity;
+    card.addEventListener("toggle", () => {
+      if (!card.isConnected || expandedForScan !== expandedFindings) return;
+      if (card.open) expandedForScan.add(idx); else expandedForScan.delete(idx);
+    });
     card.className = "issue-card";
-    
+
     // Map impact label to match severity
     let displayImpact = "LOW";
-    let shadowVar = "var(--glow-green)"; let impactColor = "green";
-    if(issue.severity === "HIGH") { shadowVar = "var(--glow-red)"; impactColor = "red"; displayImpact = "CRITICAL"; }
-    if(issue.severity === "MEDIUM") { shadowVar = "var(--glow-orange)"; impactColor = "orange"; displayImpact = "HIGH"; }
-    if(issue.severity === "LOW") { shadowVar = "var(--glow-yellow)"; impactColor = "yellow"; displayImpact = "LOW"; }
-    card.style.boxShadow = shadowVar;
-    
-    const hdr = document.createElement("div");
+    let impactColor = "green";
+    if(issue.severity === "HIGH") { impactColor = "red"; displayImpact = "CRITICAL"; }
+    if(issue.severity === "MEDIUM") { impactColor = "orange"; displayImpact = "HIGH"; }
+    if(issue.severity === "LOW") { impactColor = "yellow"; displayImpact = "LOW"; }
+
+
+    const hdr = document.createElement("summary");
     hdr.className = "issue-card-header";
     hdr.innerHTML = `
       <div class="issue-header-wrap">
         <h3 class="issue-title">${escapeHTML(issue.message)}</h3>
+        <span class="issue-source-preview">${escapeHTML(issue.file)}</span>
         <div class="issue-primary">
           <span class="badge glow-${issue.severity.toLowerCase()}">${issue.severity} Severity</span>
           <span class="issue-type">${classification.type}</span>
         </div>
       </div>
       <div class="confidence-block">
-        Rule weight: <span class="confidence-val" style="border-color:${conf>85?'var(--green)':'var(--orange)'};">${conf}/100</span>
+        <span class="finding-toggle-label">Details</span><span class="finding-chevron" aria-hidden="true">⌄</span>
+        <span class="finding-rule-weight">Rule weight: <span class="confidence-val" style="border-color:${conf>85?'var(--green)':'var(--orange)'};">${conf}/100</span></span>
       </div>
     `;
 
-    let recList = classification.recom.map((r, i) => `<li>${i+1}. ${r}</li>`).join("");
+    let recList = classification.recom.map(r => `<li>${escapeHTML(r)}</li>`).join("");
 
     const body = document.createElement("div");
     body.className = "issue-card-body";
     body.innerHTML = `
-      <div class="issue-file">Source: ${escapeHTML(issue.file)}</div>
       <div class="metrics-row">
         <div class="explanation-block">
           <h4>Potential Impact</h4>
@@ -396,10 +370,123 @@ function renderUI(data, durationMs, repoUrl, isSilent) {
     card.appendChild(hdr);
     card.appendChild(body);
     issuesListEl.appendChild(card);
-    
+
     attachFixHandlers(`copyFix_${idx}`, classification.suggested);
     attachFixHandlers(`dlPatch_${idx}`, classification.suggested);
+}
+
+function renderCoverage(meta) {
+  const panel = document.getElementById('scanCoverage');
+  panel.hidden = !meta || meta.complete;
+  panel.open = false;
+  document.getElementById('scanCoverageFailures').replaceChildren();
+  if (panel.hidden) return;
+  document.getElementById('scanCoverageLabel').textContent = `Partial scan · ${meta.filesScanned} files checked`;
+  const reasons = {
+    time_limit: 'The scan reached its time limit before every file could be checked.',
+    github_rate_limited: 'GitHub limited requests. Try again after its request limit resets.',
+    github_auth_failed: 'GitHub stopped accepting the server credential. The completed results are shown.',
+    github_forbidden: 'GitHub refused access to one or more files.'
+  };
+  document.getElementById('scanCoverageReason').textContent = reasons[meta.stopReason] ||
+    (meta.filesFailed ? 'Some files could not be downloaded. Findings from completed files are shown.' :
+      'Some files were excluded by the supported size, format or repository limits.');
+  document.getElementById('scanCoverageCounts').textContent = `${meta.filesScanned} checked · ${meta.filesSkipped} excluded · ${meta.filesFailed} failed · ${meta.filesUnprocessed || 0} not checked${meta.truncated ? ' · Repository file limit reached' : ''}`;
+  for (const failure of meta.failedFiles || []) {
+    const row = document.createElement('li');
+    row.textContent = `${failure.file}: ${failure.message}`;
+    document.getElementById('scanCoverageFailures').appendChild(row);
+  }
+}
+
+function renderUI(data, durationMs, repoUrl, isSilent) {
+  renderCoverage(data.scanMeta);
+  const score = data.score || 0;
+  updateGauge(score);
+
+  // --- First pass: count severities for risk logic ---
+  let high = 0, medium = 0, low = 0;
+  data.issues.forEach(issue => {
+    if (issue.severity === "HIGH") high++;
+    else if (issue.severity === "MEDIUM") medium++;
+    else low++;
   });
+
+  // --- Breach Risk: count-based, not score-based ---
+  let riskAssessment = "NO MATCHES";
+  if (high >= 1) { riskAssessment = "CRITICAL"; breachRiskLabel.className = "glow-val red"; }
+  else if (medium >= 2) { riskAssessment = "HIGH"; breachRiskLabel.className = "glow-val orange"; }
+  else if (medium >= 1) { riskAssessment = "MEDIUM"; breachRiskLabel.className = "glow-val yellow"; }
+  else if (low >= 1) { riskAssessment = "LOW"; breachRiskLabel.className = "glow-val green"; }
+  else { breachRiskLabel.className = "glow-val green"; }
+  breachRiskLabel.textContent = riskAssessment;
+
+  // --- Exploit Likelihood: deterministic formula ---
+  let exploitVal = Math.min(100, (high * 40) + (medium * 15) + (low * 3));
+  exploitLikelihoodVal.textContent = exploitVal + "/100";
+
+  let vis = "Public", st = 0, fk = 0, branchName = "main";
+  if (data.repoMeta) { vis = data.repoMeta.visibility; st = data.repoMeta.stars; fk = data.repoMeta.forks; branchName = data.repoMeta.branch; }
+  repoVisibility.textContent = vis; repoStars.textContent = st; repoForks.textContent = fk;
+
+  let ampClass = "green", ampLabel = "LOW";
+  let visScore = vis.toLowerCase() === "public" ? 50 : 0;
+  if ((visScore + st + (fk*2)) > 100) { ampLabel = "HIGH"; ampClass = "red"; }
+  else if ((visScore + st) > 50) { ampLabel = "MEDIUM"; ampClass = "orange"; }
+  ampFactorLabel.textContent = ampLabel; ampFactorLabel.className = `glow-val ${ampClass}`;
+
+  if (metricFiles) metricFiles.textContent = data.scanMeta?.filesScanned ?? "Unavailable";
+  if (metricTime) metricTime.textContent = (durationMs/1000).toFixed(2) + "s";
+  if (metricBranch) metricBranch.textContent = branchName;
+
+  issuesListEl.innerHTML = "";
+
+  const propagationMap = Object.create(null);
+  const cicdMatches = [];
+  const attackChains = new Set();
+  let aiInsightsHTML = "";
+
+  if (data.issues.length === 0) {
+    aiInsightsHTML += "<p>No heuristic matches found in scanned files.</p>";
+  }
+
+  // Delta Warning Generation during Live Monitor
+  if (isSilent) {
+     const newItems = data.issues.filter(i => !lastKnownIssues.some(old => old.file === i.file && old.message === i.message));
+     if(newItems.length > 0) {
+        liveAlertText.textContent = `New ${newItems[0].message} detected in ${newItems[0].file} at commit ${data.repoMeta.commitSha.substring(0,7)}.`;
+        liveAlertBanner.classList.remove("hidden");
+     }
+  }
+  lastKnownIssues = data.issues;
+
+  data.issues.forEach(issue => {
+    // (counts already computed above)
+
+    if(!propagationMap[issue.message]) propagationMap[issue.message] = new Set();
+    propagationMap[issue.message].add(issue.file);
+
+    const lowerFile = issue.file.toLowerCase();
+    if (lowerFile.includes(".github/workflows") || lowerFile.includes(".gitlab-ci") || lowerFile.includes("jenkinsfile") || lowerFile.includes("circleci") || lowerFile.includes("azure-pipelines")) {
+      cicdMatches.push(`${issue.file} [${issue.severity}]`);
+    }
+
+    const classification = getClassification(issue.message);
+
+    // Only build attack chains for HIGH/MEDIUM findings
+    if (issue.severity !== "LOW") {
+      let chainStr = [classification.type, ...classification.attackPaths].join("||");
+      attackChains.add(chainStr);
+    }
+
+
+  });
+
+  const severityOrder = { HIGH: 0, MEDIUM: 1, LOW: 2 };
+  sortedFindings = [...data.issues].sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity]);
+  findingsPage = 0;
+  expandedFindings = new Set([0, 1]);
+  renderFindingsPage();
 
   summaryTotal.textContent = `${data.issues.length} Findings`;
   sumHigh.textContent = high; sumMedium.textContent = medium; sumLow.textContent = low;
@@ -415,15 +502,21 @@ function renderUI(data, durationMs, repoUrl, isSilent) {
   let propagationFound = false;
   Object.keys(propagationMap).forEach(key => {
     let files = Array.from(propagationMap[key]);
-    if (files.length > 1) { 
+    if (files.length > 1) {
       propagationFound = true;
-      const root = document.createElement("div"); root.className = "prop-root"; root.textContent = key; propList.appendChild(root);
-      files.forEach(f => { const leaf = document.createElement("div"); leaf.className = "prop-leaf"; leaf.textContent = f; propList.appendChild(leaf); });
+      const group = document.createElement('details');
+      group.className = 'pattern-group';
+      const heading = document.createElement('summary');
+      const label = document.createElement('span'); label.textContent = key;
+      const count = document.createElement('span'); count.className = 'pattern-file-count'; count.textContent = `${files.length} files`;
+      heading.append(label, count); group.appendChild(heading);
+      const list = document.createElement('ul');
+      files.forEach(file => { const leaf = document.createElement('li'); leaf.textContent = file; list.appendChild(leaf); });
+      group.appendChild(list); propList.appendChild(group);
     }
   });
   if (propagationFound) {
     propCard.classList.remove("hidden");
-    aiInsightsHTML += `<p><span style="color:var(--orange)">Repeated patterns:</span> The same rule matched multiple files. This does not establish that the same credential was reused.</p>`;
   } else { propCard.classList.add("hidden"); }
 
   attackChainWrapper.innerHTML = "";
@@ -440,7 +533,7 @@ function renderUI(data, durationMs, repoUrl, isSilent) {
     });
     aiInsightsHTML += `<p><span style="color:var(--yellow)">Illustrative attack paths:</span> These are generic scenarios for review, not verified exploits.</p>`;
   } else { attackChainCard.classList.add("hidden"); }
-  
+
   if(ampLabel === "HIGH") { aiInsightsHTML += `<p>Repository popularity contributes to the heuristic exposure indicator; it does not measure compromise likelihood.</p>`; }
 
   // Improved intelligence summary for LOW-only results

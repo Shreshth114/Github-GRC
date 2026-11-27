@@ -229,3 +229,129 @@ test('Stop during the report transition cancels animations and discards the dela
     assert.equal(t.timers.size, 0);
   } finally { t.dom.window.close(); }
 });
+
+test('findings are severity-sorted without mutating results, with only two examples expanded', async () => {
+  const issues = [
+    { ...finding, file: 'low-first.md' },
+    { ...finding, severity: 'MEDIUM', file: 'medium-first.js' },
+    { ...finding, severity: 'HIGH', file: 'high-first.js' },
+    { ...finding, severity: 'LOW', file: 'low-second.md' },
+    { ...finding, severity: 'HIGH', file: 'high-second.js' },
+    { ...finding, severity: 'MEDIUM', file: 'medium-second.js' },
+    { ...finding, severity: 'LOW', file: 'low-last.md' }
+  ];
+  const original = JSON.stringify(issues);
+  const t = setup(() => response(scan(A, issues)));
+  try {
+    await t.w.scanRepository();
+    const cards = [...t.el('issuesList').querySelectorAll('.issue-card')];
+    assert.equal(cards.length, 6);
+    assert.equal(cards.filter(card => card.open).length, 2);
+    assert.deepEqual(cards.map(card => card.dataset.severity), ['HIGH', 'HIGH', 'MEDIUM', 'MEDIUM', 'LOW', 'LOW']);
+    assert.equal(cards[0].querySelector('.issue-source-preview').textContent, 'high-first.js');
+    assert.equal(cards[1].querySelector('.issue-source-preview').textContent, 'high-second.js');
+    assert.equal(JSON.stringify(issues), original);
+    assert.equal(t.el('summaryTotal').textContent, '7 Findings');
+    assert.equal(t.el('sumHigh').textContent, '2');
+    assert.equal(t.el('sumMedium').textContent, '2');
+    assert.equal(t.el('sumLow').textContent, '3');
+    assert.match(t.el('findingsRange').textContent, /1–6 of 7/);
+  } finally { t.dom.window.close(); }
+});
+
+test('all 40 findings remain reachable through bounded pages and native details preserve user state', async () => {
+  const issues = Array.from({ length: 40 }, (_, i) => ({ ...finding, file: `source-${i}.md` }));
+  const t = setup(() => response(scan(A, issues)));
+  try {
+    await t.w.scanRepository();
+    const first = t.el('issuesList').querySelector('summary'); first.click();
+    assert.equal(first.parentElement.open, false);
+    t.el('findingsNext').click();
+    assert.equal(t.el('issuesList').querySelectorAll('details[open]').length, 0);
+    t.el('findingsPrevious').click();
+    assert.equal(t.el('issuesList').querySelector('details').open, false);
+    const seen = new Set();
+    while (true) {
+      const cards = t.el('issuesList').querySelectorAll('.issue-card');
+      assert.ok(cards.length <= 6);
+      for (const card of cards) seen.add(card.querySelector('.issue-source-preview').textContent);
+      if (t.el('findingsNext').disabled) break;
+      t.el('findingsNext').click();
+    }
+    assert.equal(seen.size, 40);
+    assert.equal(t.el('issuesList').querySelectorAll('.issue-card').length, 4);
+    assert.match(t.el('findingsRange').textContent, /37–40 of 40/);
+    assert.equal(t.el('findingsPageLabel').textContent, 'Page 7 of 7');
+    assert.equal(t.el('summaryTotal').textContent, '40 Findings');
+  } finally { t.dom.window.close(); }
+});
+
+test('overview precedes the list, repeated file groups are collapsed and no source text becomes HTML', async () => {
+  const issues = Array.from({ length: 29 }, (_, i) => ({ ...finding, file: i === 0 ? '<img src=x onerror=alert(1)>.md' : `docs/file-${i}.md` }));
+  const t = setup(() => response(scan(A, issues)));
+  try {
+    await t.w.scanRepository();
+    assert.ok(t.el('summaryTotal').compareDocumentPosition(t.el('issuesList')) & t.w.Node.DOCUMENT_POSITION_FOLLOWING);
+    assert.ok(t.el('intelSummary').compareDocumentPosition(t.el('issuesList')) & t.w.Node.DOCUMENT_POSITION_FOLLOWING);
+    const group = t.el('propList').querySelector('details');
+    assert.equal(group.open, false);
+    assert.match(group.querySelector('summary').textContent, /29 files/);
+    group.querySelector('summary').click();
+    assert.equal(group.open, true);
+    assert.equal(group.querySelectorAll('li').length, 29);
+    assert.equal(t.el('issuesList').querySelectorAll('img').length, 0);
+    assert.equal(t.el('propList').querySelectorAll('img').length, 0);
+    assert.match(t.el('issuesList').querySelector('.issue-source-preview').textContent, /<img/);
+    assert.ok(!/^1\./.test(t.el('issuesList').querySelector('ol li').textContent), 'Native list numbering is not duplicated in its text');
+  } finally { t.dom.window.close(); }
+});
+
+test('zero, single and refreshed scans reset page state and keep example actions working on later pages', async () => {
+  let issues = Array.from({ length: 8 }, (_, i) => ({ ...finding, message: '.env reference found', file: `docs/${i}.md` }));
+  let copied;
+  const t = setup(() => response(scan(A, issues)), w => {
+    Object.defineProperty(w.navigator, 'clipboard', { value: { writeText: async text => { copied = text; } } });
+  });
+  try {
+    await t.w.scanRepository();
+    t.el('findingsNext').click();
+    t.el('issuesList').querySelector('summary').click();
+    t.el('copyFix_6').click(); await settle();
+    assert.equal(copied, '# Add .env to .gitignore\nnode_modules/\n.env');
+    issues = [finding]; await t.w.scanRepository();
+    assert.equal(t.el('findingsPagination').hidden, true);
+    assert.equal(t.el('issuesList').querySelectorAll('details[open]').length, 1);
+    issues = []; await t.w.scanRepository();
+    assert.equal(t.el('findingsPagination').hidden, true);
+    assert.equal(t.el('issuesList').querySelectorAll('.issue-card').length, 0);
+    assert.match(t.el('issuesList').textContent, /No matching patterns/);
+    assert.equal(t.el('summaryTotal').textContent, '0 Findings');
+  } finally { t.dom.window.close(); }
+});
+
+test('partial coverage stays compact with readable details and no repeated-pattern boilerplate', async () => {
+  let data = scan(A, [finding, { ...finding, file: 'second.js' }]);
+  Object.assign(data.scanMeta, { complete: false, filesScanned: 86, filesFailed: 1, filesUnprocessed: 152,
+    stopReason: 'time_limit', failedFiles: [{ file: '<img src=x>.js', message: 'GitHub took too long to respond.' }] });
+  const t = setup(() => response(data));
+  try {
+    await t.w.scanRepository();
+    const panel = t.el('scanCoverage');
+    assert.equal(panel.hidden, false);
+    assert.equal(panel.open, false);
+    assert.equal(t.el('scanCoverageLabel').textContent, 'Partial scan · 86 files checked');
+    assert.ok(!t.el('intelSummary').textContent.includes('Repeated patterns:'));
+    assert.ok(!t.el('intelSummary').textContent.includes('152'));
+    assert.ok(!panel.textContent.includes('time_limit'));
+    panel.querySelector('summary').click();
+    assert.equal(panel.open, true);
+    assert.match(t.el('scanCoverageReason').textContent, /time limit/);
+    assert.match(t.el('scanCoverageCounts').textContent, /152 not checked/);
+    assert.match(t.el('scanCoverageFailures').textContent, /<img src=x>.js/);
+    assert.equal(panel.querySelectorAll('img').length, 0);
+    data = scan(); await t.w.scanRepository();
+    assert.equal(panel.hidden, true);
+    assert.equal(panel.open, false);
+    assert.equal(t.el('scanCoverageFailures').children.length, 0);
+  } finally { t.dom.window.close(); }
+});
