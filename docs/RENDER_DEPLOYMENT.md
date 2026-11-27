@@ -29,7 +29,7 @@ Existing service reused: `Github-GRC`, free Node web service, Oregon, in the pre
 
 ## Deployment and final checks
 
-Pending final rollout and live functional checks. Results will be recorded after the service is live.
+The first rollout became live. GitHub CI exposed one false positive: the AWS detector matched the literal spelling inside its own rule definition. The expression is now assembled from two strings with identical runtime matching behavior; a regression test verifies both credential detection and absence of this self-match. The high-severity CI gate was retained. Final rollout and functional results will be recorded below.
 
 ## Limits
 

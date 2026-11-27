@@ -19,6 +19,12 @@ test('file exclusions match dashboard behavior', () => {
     assert.equal(isLikelyTextFile(name), false);
   }
 });
+test('AWS rule still detects credentials without flagging its own definition', () => {
+  for (const text of ['aws_secret_' + 'access_key', 'AK' + 'IA' + 'Z'.repeat(16)]) {
+    assert.ok(scanContent(text, 'config.js').some(f => f.severity === 'HIGH'));
+  }
+  assert.equal(scanContent(readFileSync('lib/scanner.js', 'utf8'), 'lib/scanner.js').filter(f => f.severity === 'HIGH').length, 0);
+});
 test('CI reports and annotations do not reproduce matched credentials', () => {
   const sensitive = 'synthetic-sensitive-value';
   const issues = [{ severity: 'HIGH', file: 'config.js', line: 3, message: 'Credential pattern', snippet: sensitive }];
