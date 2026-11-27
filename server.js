@@ -12,12 +12,14 @@ if (!githubToken) {
 const express = require("express");
 const axios = require("axios");
 const cors = require("cors");
+const { setTimeout: pause } = require('node:timers/promises');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const GITHUB_API_BASE = "https://api.github.com";
 const MAX_FILES_TO_SCAN = 300;
 const MAX_FILE_SIZE_BYTES = 300000;
+const FILE_FETCH_CONCURRENCY = 5;
 
 const githubHeaders = {
   "User-Agent": "github-grc-scanner",
@@ -128,41 +130,64 @@ app.post("/scan", async (req, res) => {
     const indexedCommit = revision.data.sha;
     if (typeof indexedCommit !== 'string' || !/^[a-f0-9]{40}$/i.test(indexedCommit)) throw new Error('Invalid upstream revision');
     const files = await fetchRepoFiles(parsed.owner, parsed.repo, indexedCommit, options());
-    const issues = [];
-    let filesScanned = 0;
-    let filesSkipped = 0;
-    let filesFailed = 0;
+    const outcomes = new Array(files.length);
+    let nextFile = 0;
     let stopReason = null;
+    let fatalError = null;
 
-    for (const file of files) {
-      if (controller.signal.aborted) return;
-      if (Date.now() >= deadline) { stopReason = 'time_limit'; break; }
-      if (file.size > MAX_FILE_SIZE_BYTES) { filesSkipped++; continue; }
-      try {
+    async function readFiles() {
+      while (nextFile < files.length && !stopReason && !controller.signal.aborted) {
+        if (Date.now() >= deadline) { stopReason = 'time_limit'; return; }
+        const index = nextFile++;
+        const file = files[index];
+        if (file.size > MAX_FILE_SIZE_BYTES) { outcomes[index] = { status: 'skipped' }; continue; }
         const blobUrl = `/repos/${parsed.owner}/${parsed.repo}/contents/${encodeURIComponent(file.path)}?ref=${indexedCommit}`;
-        const fileResp = await github.get(blobUrl, options());
-        if (fileResp.data?.type === "file" && typeof fileResp.data.content === 'string') {
-          const decoded = Buffer.from(fileResp.data.content, "base64").toString("utf8");
-          const fileIssues = scanContent(decoded, file.path);
-          filesScanned++;
-          issues.push(...fileIssues);
-        } else { filesSkipped++; }
-      } catch (error) {
-        filesFailed++;
-        const failure = githubFailure(error);
-        if ([401, 403, 429].includes(error.response?.status)) {
-          if (!filesScanned) throw error;
-          stopReason = failure.code;
-          break;
+        for (let attempt = 0; attempt < 2; attempt++) {
+          if (controller.signal.aborted || stopReason) return;
+          if (Date.now() >= deadline) { stopReason = 'time_limit'; return; }
+          try {
+            const fileResp = await github.get(blobUrl, options());
+            if (fileResp.data?.type === 'file' && typeof fileResp.data.content === 'string') {
+              const decoded = Buffer.from(fileResp.data.content, 'base64').toString('utf8');
+              outcomes[index] = { status: 'scanned', issues: scanContent(decoded, file.path) };
+            } else { outcomes[index] = { status: 'skipped' }; }
+            break;
+          } catch (error) {
+            if (controller.signal.aborted) return;
+            const failure = githubFailure(error, 'file');
+            outcomes[index] = { status: 'failed', file: file.path, code: failure.code,
+              message: error.response?.status === 404 ? 'This file could not be retrieved at the selected revision.' : failure.error };
+            if ([401, 403, 429].includes(error.response?.status)) {
+              if (!fatalError) fatalError = error;
+              if (!stopReason) stopReason = failure.code;
+              return;
+            }
+            const transient = error.response?.status >= 500 || ['ECONNABORTED', 'ETIMEDOUT', 'ECONNRESET', 'EAI_AGAIN'].includes(error.code);
+            if (attempt === 0 && transient && Date.now() + 250 < deadline) {
+              await pause(100, undefined, { signal: controller.signal }).catch(() => {});
+              continue;
+            }
+            break;
+          }
         }
       }
     }
 
+    await Promise.all(Array.from({ length: Math.min(FILE_FETCH_CONCURRENCY, files.length) }, readFiles));
+    if (controller.signal.aborted) return;
+    // Preserve tree order, independently of network completion order.
+    const processed = outcomes.filter(Boolean);
+    const filesScanned = processed.filter(file => file.status === 'scanned').length;
+    const filesSkipped = processed.filter(file => file.status === 'skipped').length;
+    const failedFiles = processed.filter(file => file.status === 'failed').map(({ file, code, message }) => ({ file, code, message }));
+    const filesFailed = failedFiles.length;
+    if (!filesScanned && fatalError) throw fatalError;
+    const issues = processed.flatMap(file => file.issues || []);
     const score = calculateScore(issues);
 
     return res.json({ score, issues, repoMeta: { branch, stars, forks, visibility, commitSha: indexedCommit },
       scanMeta: { filesScanned, filesSkipped, filesFailed, maxFiles: MAX_FILES_TO_SCAN,
-        filesUnprocessed: files.length - filesScanned - filesSkipped - filesFailed, stopReason,
+        filesUnprocessed: files.length - filesScanned - filesSkipped - filesFailed, stopReason, failedFiles,
         maxFileSizeBytes: MAX_FILE_SIZE_BYTES, complete: !stopReason && filesFailed === 0 && filesSkipped === 0 && !files.truncated,
         truncated: Boolean(files.truncated) } });
   } catch (error) {

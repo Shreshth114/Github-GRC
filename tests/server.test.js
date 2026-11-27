@@ -146,20 +146,32 @@ test('invalid scan commit is rejected before any upstream request', async () => 
   github.get = async () => { throw new Error('No request expected'); };
   assert.equal((await post('/scan', { repoUrl: 'https://github.com/a/b', commitSha: '../bad' })).status, 400);
 });
-test('rate-limited file reads stop rather than consuming the rest of the quota', async () => {
+test('rate-limited file reads stop scheduling queued work while in-flight reads settle', async () => {
+  const pendingReads = [];
   let reads = 0;
   github.get = async url => {
     if (url === '/repos/a/b') return { data: { visibility: 'public', default_branch: 'main' } };
     if (url.includes('/commits/')) return { data: { sha: SHA } };
-    if (url.includes('/git/trees/')) return { data: { tree: ['one.js', 'two.js', 'three.js'].map(path => ({ type: 'blob', path, size: 20 })) } };
+    if (url.includes('/git/trees/')) return { data: { tree: Array.from({ length: 10 }, (_, i) => ({ type: 'blob', path: `${i}.js`, size: 20 })) } };
     reads++;
-    if (reads > 1) throw { response: { status: 429 } };
-    return { data: { type: 'file', content: Buffer.from('safe').toString('base64') } };
+    return new Promise((resolve, reject) => pendingReads.push({ resolve, reject }));
   };
-  const d = await (await post('/scan', { repoUrl: 'https://github.com/a/b' })).json();
-  assert.equal(reads, 2);
+  const request = post('/scan', { repoUrl: 'https://github.com/a/b' });
+  const expires = Date.now() + 2000;
+  while (pendingReads.length < 5 && Date.now() < expires) await new Promise(resolve => setTimeout(resolve, 5));
+  try {
+    assert.equal(pendingReads.length, 5);
+    pendingReads[1].reject({ response: { status: 429 } });
+    await new Promise(resolve => setImmediate(resolve));
+  } finally {
+    for (const read of pendingReads) read.resolve({ data: { type: 'file', content: Buffer.from('safe').toString('base64') } });
+  }
+  const d = await (await request).json();
+  assert.equal(reads, 5);
+  assert.equal(d.scanMeta.filesScanned, 4);
+  assert.equal(d.scanMeta.filesFailed, 1);
+  assert.equal(d.scanMeta.filesUnprocessed, 5);
   assert.equal(d.scanMeta.complete, false);
-  assert.equal(d.scanMeta.filesUnprocessed, 1);
   assert.equal(d.scanMeta.stopReason, 'github_rate_limited');
 });
 test('concurrent scans are bounded and release their slots after completion', async () => {
@@ -203,4 +215,54 @@ test('scan time budget reports unprocessed files instead of silently claiming co
     assert.equal(d.scanMeta.filesScanned, 1);
     assert.equal(d.scanMeta.filesUnprocessed, 1);
   } finally { Date.now = now; }
+});
+
+test('239 files use bounded parallel reads, preserve source order and retry a transient failure once', async () => {
+  let active = 0, peak = 0;
+  const attempts = new Map();
+  github.get = async url => {
+    if (url === '/repos/a/b') return { data: { visibility: 'public', default_branch: 'main' } };
+    if (url.includes('/commits/')) return { data: { sha: SHA } };
+    if (url.includes('/git/trees/')) return { data: { tree: Array.from({ length: 239 }, (_, i) => ({ type: 'blob', path: `${i}.js`, size: 30 })) } };
+    assert.ok(url.endsWith(`?ref=${SHA}`));
+    const index = Number(url.match(/contents\/(\d+)\.js/)[1]);
+    const attempt = (attempts.get(index) || 0) + 1;
+    attempts.set(index, attempt);
+    active++; peak = Math.max(peak, active);
+    try {
+      await new Promise(resolve => setTimeout(resolve, (index % 5) * 2 + 1));
+      if (index === 18 && attempt === 1) throw { response: { status: 503 } };
+      return { data: { type: 'file', content: Buffer.from('password = placeholder').toString('base64') } };
+    } finally { active--; }
+  };
+  const r = await post('/scan', { repoUrl: 'https://github.com/a/b' });
+  const d = await r.json();
+  assert.equal(r.status, 200);
+  assert.ok(peak > 1 && peak <= 5);
+  assert.equal(attempts.size, 239);
+  assert.equal(attempts.get(18), 2);
+  assert.equal(d.scanMeta.complete, true);
+  assert.equal(d.scanMeta.filesScanned, 239);
+  assert.equal(d.scanMeta.filesUnprocessed, 0);
+  assert.equal(d.scanMeta.filesFailed, 0);
+  assert.deepEqual(d.scanMeta.failedFiles, []);
+  assert.deepEqual(d.issues.map(issue => issue.file), Array.from({ length: 239 }, (_, i) => `${i}.js`));
+});
+
+test('permanent file failures include sanitized diagnostic details and are not retried', async () => {
+  let attempts = 0;
+  github.get = async url => {
+    if (url === '/repos/a/b') return { data: { visibility: 'public', default_branch: 'main' } };
+    if (url.includes('/commits/')) return { data: { sha: SHA } };
+    if (url.includes('/git/trees/')) return { data: { tree: [{ type: 'blob', path: 'unavailable.js', size: 30 }] } };
+    attempts++;
+    throw { response: { status: 404, data: { message: 'synthetic sensitive upstream data' } }, config: { headers: { Authorization: 'synthetic-sensitive-header' } } };
+  };
+  const d = await (await post('/scan', { repoUrl: 'https://github.com/a/b' })).json();
+  assert.equal(attempts, 1);
+  assert.equal(d.scanMeta.complete, false);
+  assert.equal(d.scanMeta.filesFailed, 1);
+  assert.equal(d.scanMeta.failedFiles[0].file, 'unavailable.js');
+  assert.ok(!JSON.stringify(d).includes('synthetic sensitive'));
+  assert.ok(!JSON.stringify(d).includes('synthetic-sensitive-header'));
 });

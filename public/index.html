@@ -38,7 +38,7 @@
       <section class="scan-box glass-card accent-glow">
         <h2>Initiate Intelligence Scan</h2>
         <p class="subtitle">Scan public repository files for credential patterns and monitor commits. Findings require source review.</p>
-        
+
         <div class="input-group">
           <input
             id="repoUrl"
@@ -97,14 +97,43 @@
       <!-- Threat Intelligence Dashboard -->
       <section id="results" class="results-dashboard hidden">
         <p id="resultsSource" class="subtitle sm"></p>
-        
+        <details id="scanCoverage" class="scan-coverage" hidden>
+          <summary><span id="scanCoverageLabel">Partial scan</span><span class="coverage-disclosure">View coverage ⌄</span></summary>
+          <div class="coverage-body">
+            <p id="scanCoverageReason"></p>
+            <p id="scanCoverageCounts"></p>
+            <ul id="scanCoverageFailures"></ul>
+          </div>
+        </details>
+
         <!--- Optional Display for Monitor Active Mode --->
         <div id="activeMonitorAlert" class="monitor-top-alert hidden">
           <span class="pulse-dot active"></span> <span id="monPulseText">Monitoring repository... waiting for new commits.</span>
         </div>
 
+        <div class="results-overview" aria-label="Scan overview">
+            <!-- Total Summary Pills -->
+            <div class="glass-card summary-totals">
+               <div class="summary-total" id="summaryTotal">0 Findings</div>
+               <div class="dots-row">
+                 <span class="badge glow-red"><span id="sumHigh">0</span> HIGH</span>
+                 <span class="badge glow-orange"><span id="sumMedium">0</span> MED</span>
+                 <span class="badge glow-yellow"><span id="sumLow">0</span> LOW</span>
+               </div>
+            </div>
+
+            <!-- Security Intelligence Summary -->
+            <div class="glass-card ai-insights-card">
+              <h3><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg> Intelligence Summary</h3>
+              <div id="intelSummary" class="ai-list mt-3 text-sm">
+                <!-- Dynamically generated AI summary -->
+              </div>
+            </div>
+
+        </div>
+
         <div class="dashboard-grid layout-3col">
-          
+
           <!-- Left Column: Live Monitoring, Metrics, History, Amplification -->
           <div class="dashboard-col left-col">
 
@@ -117,7 +146,7 @@
                 <li><span class="metric-lbl">Last Commit:</span> <strong id="monLastSha">-</strong></li>
                 <li><span class="metric-lbl">Interval:</span> <strong>5 seconds after each completed check</strong></li>
               </ul>
-              
+
               <div class="activity-feed-wrapper">
                  <div class="feed-header">Activity Feed</div>
                  <div id="activityFeed" class="activity-feed-list">
@@ -125,7 +154,7 @@
                  </div>
               </div>
             </div>
-            
+
             <!-- Circular Gauge & Score -->
             <div class="glass-card flex-col-center">
               <h3>Heuristic Security Index</h3>
@@ -135,7 +164,7 @@
                    <span id="scoreValue" class="gauge-score">0</span>
                 </div>
               </div>
-              
+
               <div class="risk-highlight mt-4">
                 <span class="metric-lbl">Pattern severity:</span>
                 <strong id="breachRiskLabel" class="glow-val">UNKNOWN</strong>
@@ -166,15 +195,24 @@
               <h3>Scan History</h3>
               <ul id="historyList" class="history-list"></ul>
             </div>
-            
+
           </div>
 
           <!-- Middle Column: Issues -->
           <div class="dashboard-col main-col">
             <div class="issues-header">
               <h2>Detected Security Anomalies</h2>
+              <p class="findings-guide">The first two findings are expanded. Open any row to inspect its details.</p>
             </div>
-            
+
+            <div class="findings-toolbar">
+              <p id="findingsRange" role="status" aria-live="polite"></p>
+              <nav id="findingsPagination" aria-label="Findings pages" hidden>
+                <button id="findingsPrevious" class="btn-sm" type="button" aria-controls="issuesList">Previous</button>
+                <span id="findingsPageLabel"></span>
+                <button id="findingsNext" class="btn-sm" type="button" aria-controls="issuesList">Next</button>
+              </nav>
+            </div>
             <div id="issuesList" class="issues-container">
               <!-- Dynamically populated -->
             </div>
@@ -182,25 +220,7 @@
 
           <!-- Right Column: Propagations, CI/CD, Chains, Summaries -->
           <div class="dashboard-col right-col">
-            
-            <!-- Security Intelligence Summary -->
-            <div class="glass-card ai-insights-card">
-              <h3><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg> Intelligence Summary</h3>
-              <div id="intelSummary" class="ai-list mt-3 text-sm">
-                <!-- Dynamically generated AI summary -->
-              </div>
-            </div>
 
-            <!-- Total Summary Pills -->
-            <div class="glass-card summary-totals">
-               <div class="summary-total" id="summaryTotal">0 Findings</div>
-               <div class="dots-row">
-                 <span class="badge glow-red"><span id="sumHigh">0</span> HIGH</span>
-                 <span class="badge glow-orange"><span id="sumMedium">0</span> MED</span>
-                 <span class="badge glow-yellow"><span id="sumLow">0</span> LOW</span>
-               </div>
-            </div>
-            
             <!-- CI/CD Pipeline Detection -->
             <div class="glass-card cicd-card hidden" id="cicdCard">
               <h3 style="color:var(--red)"><svg width="14" height="14" viewBox="0 0 24 24" fill="var(--red)" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg> CI/CD Pattern Matches</h3>
